@@ -58,6 +58,10 @@ export const rankWorks = (query: string, works: ReadonlyArray<Work>, author?: st
     .sort((a, b) => b.similarity - a.similarity)
 }
 
+/** `find` text output: similarity, DOI, year, OpenAlex work type (article, book, review, …), first author, title. */
+export const findLine = (c: Candidate) =>
+  [c.similarity, c.doi ? `doi:${c.doi}` : "-", c.year ?? "-", c.type ?? "-", c.firstAuthor ?? "-", c.title].join("\t")
+
 const URL = "https://api.openalex.org/works"
 
 /** OpenAlex title search. Commas and pipes are filter operators, so only the normalized title is sent. */

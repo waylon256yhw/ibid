@@ -1,8 +1,22 @@
 import { Console, Data, Effect, Predicate, Runtime } from "effect"
 import { CliError, Flag } from "effect/cli"
 import { fetchCsl, parseId } from "./resolve.ts"
-import type { IbidError, Item } from "./schema.ts"
-import { findItem, itemKey, keyOf, plain, upsertItem, year } from "./store.ts"
+import { type Csl, type IbidError, isManual, type Item, type Overrides, type RegistryItem } from "./schema.ts"
+import {
+  authorName,
+  withOverrides,
+  writeItem,
+  effective,
+  findItem,
+  itemKey,
+  keyOf,
+  manualKey,
+  OVERRIDE_FIELDS,
+  type OverrideField,
+  plain,
+  upsertItem,
+  year
+} from "./store.ts"
 
 export const json = Flag.Boolean("json").pipe(Flag.withDescription("Print only JSON on stdout"), Flag.withDefault(false))
 
@@ -13,17 +27,83 @@ export const expectTitle = Flag.String("expect-title").pipe(
 
 export const printJson = (value: unknown) => Console.log(JSON.stringify(value, null, 2))
 
-/** id, status, year, first author, title, container — tab separated. */
-export const line = ({ canonical: c, id, verification }: Item) => {
+/** `MANUAL`, or the title check, with a trailing `*` when local overrides apply. */
+export const status = (item: Item) => isManual(item) ? "MANUAL" : `${item.verification.titleMatch}${item.overrides ? "*" : ""}`
+
+/** The effective record in brief: what `line` prints and what `col show --json` embeds. */
+export const summary = (item: Item) => {
+  const c = effective(item)
   const a = c.author?.[0]
-  return [
-    id,
-    verification.titleMatch,
-    year(c) ?? "-",
-    a ? a.family ?? a.literal ?? a.given : "-",
-    plain(c.title),
-    c["container-title"] ?? c.publisher ?? "-"
-  ].join("\t")
+  return {
+    id: item.id,
+    status: status(item),
+    year: year(c) ?? null,
+    firstAuthor: a ? a.family ?? a.literal ?? a.given ?? null : null,
+    authorCount: c.author?.length ?? 0,
+    title: plain(c.title),
+    journal: c["container-title"] ?? c.publisher ?? null
+  }
+}
+
+/** id, status, year, first author, title, container — tab separated. */
+export const line = (item: Item) => {
+  const s = summary(item)
+  return [s.id, s.status, s.year ?? "-", s.firstAuthor ?? "-", s.title, s.journal ?? "-"].join("\t")
+}
+
+/** At most 10 names, then the total. */
+export const authorsText = (as: Csl["author"]) =>
+  as?.length ? `${as.slice(0, 10).map(authorName).join("; ")}${as.length > 10 ? `; … (${as.length} authors)` : ""}` : undefined
+
+/** `2023-05-16`: month and day zero-padded. */
+export const dateText = (d: Csl["issued"]) => d?.["date-parts"][0]?.map((n, i) => i === 0 ? String(n) : String(n).padStart(2, "0")).join("-")
+
+const fieldText = (c: Csl, field: OverrideField) => {
+  const key = OVERRIDE_FIELDS[field]
+  return key === "author" ? authorsText(c.author) : key === "issued" ? dateText(c.issued) : c[key]
+}
+
+/** For each overridden field, the override and the registry value it hides. */
+export const overrideLines = (item: RegistryItem) =>
+  (Object.keys(OVERRIDE_FIELDS) as Array<OverrideField>).flatMap((f) =>
+    item.overrides?.[OVERRIDE_FIELDS[f]] === undefined
+      ? []
+      : [`  override ${f}: ${fieldText(effective(item), f) ?? ""}`, `    registry: ${fieldText(item.canonical, f) ?? "(none)"}`]
+  )
+
+/** Human `show`: the summary line, the effective record's fields, then each override beside the registry value. */
+export const showLines = (item: Item) => {
+  const notes: Array<readonly [string, string | undefined]> = [["tags", item.tags.join(", ")], ...item.evidences.map((e) => ["evidence", evidenceText(e)] as const)]
+  const field = ([k, v]: readonly [string, string | undefined]) => v ? [`  ${k}: ${v}`] : []
+  if (isManual(item)) return [line(item), ...[["text", item.manual] as const, ["source", "manual entry, not from a registry"] as const, ...notes].flatMap(field)]
+  const c = effective(item)
+  const v = item.verification
+  const rows: Array<readonly [string, string | undefined]> = [
+    ["type", c.type],
+    ["authors", authorsText(c.author)],
+    ["issued", dateText(c.issued)],
+    ["source", [c["container-title"], c.volume && `vol ${c.volume}`, c.issue && `no ${c.issue}`, c.page && `pp ${c.page}`].filter(Boolean).join(", ")],
+    ["language", c.language],
+    ["DOI", c.DOI],
+    ["PMID", c.PMID],
+    ["PMCID", c.PMCID],
+    ["verified", `${v.titleMatch}${v.similarity !== undefined ? ` (${v.similarity})` : ""} via ${v.url} at ${v.fetchedAt}`],
+    ["sha256", v.sha256],
+    ...notes
+  ]
+  return [line(item), ...rows.flatMap(field), ...overrideLines(item)]
+}
+
+export const MAX_AUTHORS = 50
+
+/** A registry author list that is empty or implausibly long, unless the authors are overridden. */
+export const authorWarnings = (item: Item): Array<string> => {
+  if (isManual(item) || item.overrides?.author) return []
+  const n = item.canonical.author?.length ?? 0
+  const fix = `ibid override ${item.id} --authors "Family, Given; ..."`
+  if (n === 0) return [`the registry record has no authors; if the work has any, set them with ${fix}`]
+  if (n > MAX_AUTHORS) return [`the registry record lists ${n} authors; check them against the byline and correct them with ${fix}`]
+  return []
 }
 
 /** Evidence entries of any shape: notes print their text, anything else as compact JSON. */
@@ -77,6 +157,20 @@ export const fetchAndStore = Effect.fn("fetchAndStore")(function*(ids: ReadonlyA
   }))
 })
 
+/** `ibid override`: at least one change; a manual entry has no registry record to override. */
+export const overrideItem = Effect.fn("overrideItem")(function*(input: string, set: Overrides, clear: ReadonlyArray<OverrideField>, clearAll: boolean) {
+  if (Object.keys(set).length === 0 && clear.length === 0 && !clearAll) {
+    return yield* usage("give a field to override (--title, --authors, --year, --journal, --volume, --issue, --page), --clear <field> or --clear-all")
+  }
+  const item = yield* findItem(input)
+  if (isManual(item)) return yield* usage(`${item.id} is a manual entry with no registry record to override; add the corrected text with add --manual`)
+  return yield* writeItem(withOverrides(item, set, clear, clearAll))
+})
+
+/** Adds each stored item's `authorWarnings` to its result (`add`, `col add`). */
+export const withWarnings = <A extends { item: Item }>(results: ReadonlyArray<Result<A>>) =>
+  results.map((r) => r.ok ? { ...r, warnings: authorWarnings(r.item) } : r)
+
 /** Runs `f` for each input, collecting a per-input result instead of stopping at the first error. */
 export const tryEach = <A extends object, R>(ids: ReadonlyArray<string>, f: (input: string) => Effect.Effect<A, IbidError, R>) =>
   Effect.forEach(ids, (input) =>
@@ -89,9 +183,11 @@ export const tryEach = <A extends object, R>(ids: ReadonlyArray<string>, f: (inp
 export const findOrFetch = Effect.fn("findOrFetch")(function*(ids: ReadonlyArray<string>, expectTitles?: ReadonlyArray<string>) {
   if (expectTitles) return yield* fetchAndStore(ids, expectTitles)
   const local = yield* tryEach(ids, (input) => findItem(input).pipe(Effect.map((item) => ({ item }))))
-  const missing = local.flatMap((r) => !r.ok && r.error._tag === "IdentifierNotFoundError" ? [r.input] : [])
+  // A manual entry exists only locally; there is nothing to fetch.
+  const fetchable = (r: Result<{ item: Item }>) => !r.ok && r.error._tag === "IdentifierNotFoundError" && !manualKey(r.input)
+  const missing = local.flatMap((r) => fetchable(r) ? [r.input] : [])
   const fetched = yield* fetchAndStore(missing)
-  return local.map((r) => !r.ok && r.error._tag === "IdentifierNotFoundError" ? fetched[missing.indexOf(r.input)]! : r)
+  return local.map((r) => fetchable(r) ? fetched[missing.indexOf(r.input)]! : r)
 })
 
 /**
@@ -106,13 +202,21 @@ export class Reported extends Data.TaggedError("Reported")<{}> {
 export const failWith = (message: string, asJson: boolean): Effect.Effect<never, Reported | CliError.UserError> =>
   Effect.fail(asJson ? new Reported() : usage(message))
 
-/** Prints results (human: `ok` lines on stdout, errors on stderr) and fails if any failed. */
+/**
+ * Prints results (human: `ok` lines on stdout, errors and any `warnings` on stderr) and fails if any failed.
+ * Warnings never change the exit code.
+ */
 export const report = Effect.fn("report")(function*<A>(results: ReadonlyArray<Result<A>>, asJson: boolean, okLine: (r: A) => string) {
   if (asJson) {
     yield* printJson(results.map((r) => r.ok ? r : { ...r, error: errorJson(r.error) }))
   } else {
     for (const r of results) {
-      yield* r.ok ? Console.log(okLine(r)) : Console.error(`error\t${r.input}\t${r.error.message}`)
+      if (!r.ok) {
+        yield* Console.error(`error\t${r.input}\t${r.error.message}`)
+        continue
+      }
+      yield* Console.log(okLine(r))
+      for (const w of (r as { warnings?: ReadonlyArray<string> }).warnings ?? []) yield* Console.error(`warning\t${r.input}\t${w}`)
     }
   }
   const failed = results.filter((r) => !r.ok).length

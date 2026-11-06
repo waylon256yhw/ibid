@@ -14,16 +14,16 @@ import {
 } from "./collections.ts"
 import type { Collection } from "./schema.ts"
 import { readItems } from "./store.ts"
-import { checkTitles, expectTitle, findOrFetch, handle, json, line, printJson, report } from "./ui.ts"
+import { checkTitles, expectTitle, findOrFetch, handle, json, line, printJson, report, summary, withWarnings } from "./ui.ts"
 
 const name = Argument.String("name").pipe(Argument.withDescription("Collection name, ^[a-z0-9][a-z0-9._-]*$"))
 const ref = Argument.String("ref").pipe(Argument.withDescription("1-based position or item identifier"))
 
-/** Numbered entries joined with the stored items; `[n]` is the citation number. */
-const printCollection = Effect.fn("printCollection")(function*(col: Collection, asJson: boolean) {
+/** Numbered entries joined with the stored items; `[n]` is the citation number. JSON carries each item's `summary`. */
+export const printCollection = Effect.fn("printCollection")(function*(col: Collection, asJson: boolean) {
   const items = yield* readItems(col.entries.map((e) => e.itemId))
   const entries = col.entries.map((e, i) => ({ position: i + 1, ...e, item: items.get(e.itemId) ?? null }))
-  if (asJson) return yield* printJson({ ...col, entries })
+  if (asJson) return yield* printJson({ ...col, entries: entries.map((e) => ({ ...e, item: e.item && summary(e.item) })) })
   yield* Console.log(`# ${col.name}${col.title ? `\t${col.title}` : ""}`)
   for (const e of entries) {
     yield* Console.log(`[${e.position}]\t${e.item ? line(e.item) : `${e.itemId}\tMISSING`}`)
@@ -53,7 +53,7 @@ const show = Command.make("show", { name, json }, handle(Effect.fn(function*({ j
 
 const add = Command.make("add", {
   name,
-  ids: Argument.String("id").pipe(Argument.withDescription("Stored item, or an identifier to fetch and verify"), Argument.atLeast(1)),
+  ids: Argument.String("id").pipe(Argument.withDescription("Stored item (a manual:<hash> entry too), or an identifier to fetch and verify"), Argument.atLeast(1)),
   context: Flag.String("context").pipe(Flag.withDescription("Where it is cited, e.g. \"Slide 3\""), Flag.optional),
   section: Flag.String("section").pipe(Flag.withDescription("Section of the deliverable"), Flag.optional),
   at: Flag.Int("at").pipe(Flag.withDescription("Insert new entries at this 1-based position"), Flag.optional),
@@ -61,7 +61,7 @@ const add = Command.make("add", {
   json
 }, handle(Effect.fn(function*({ at, context, expectTitle, ids, json, name, section }) {
   const before = yield* readCollection(name)
-  const results = yield* findOrFetch(ids, yield* checkTitles(ids, expectTitle))
+  const results = withWarnings(yield* findOrFetch(ids, yield* checkTitles(ids, expectTitle)))
   const found = results.flatMap((r) => r.ok ? [r.item.id] : [])
   const { actions, col } = yield* addEntries(before, found, {
     context: Option.getOrUndefined(context),

@@ -1,6 +1,5 @@
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
-import { authorName, fail, findItem, keyOf, listJson, plain, readJson, removeItem, storeDir, writeJsonAtomic, year } from "./store.ts"
-import { parseId } from "./resolve.ts"
+import { authorName, effective, fail, findItem, listJson, plain, readJson, removeItem, storeDir, writeJsonAtomic, year } from "./store.ts"
 import { Collection, CollectionError, type Entry, type Item, ItemReferencedError } from "./schema.ts"
 
 const NAME = /^[a-z0-9][a-z0-9._-]*$/
@@ -85,7 +84,7 @@ export const indexOfRef = Effect.fn("indexOfRef")(function*(col: Collection, ref
   // An item deleted from the store behind our back can still be removed by its key.
   const id = yield* findItem(ref).pipe(
     Effect.map((i) => i.id),
-    Effect.catchTag("IdentifierNotFoundError", () => parseId(ref).pipe(Effect.map(keyOf)))
+    Effect.catchTag("IdentifierNotFoundError", (e) => Effect.succeed(e.id))
   )
   const i = col.entries.findIndex((e) => e.itemId === id)
   if (i < 0) return yield* bad(col, `${ref} is not in this collection`)
@@ -111,7 +110,7 @@ export type SortKey = "year" | "author" | "title"
 
 const sortValue = (item: Item | undefined, by: SortKey): string | number | undefined => {
   if (!item) return undefined
-  const c = item.canonical
+  const c = effective(item)
   if (by === "year") return year(c)
   if (by === "author") return c.author?.[0] ? authorName(c.author[0]).toLowerCase() : undefined
   return plain(c.title).toLowerCase()

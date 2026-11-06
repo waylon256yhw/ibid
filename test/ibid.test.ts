@@ -15,7 +15,7 @@ import { citationKeys, dossier, exportRows, isChinese, renderBibtex, renderList 
 import { findCandidates } from "../src/find.ts"
 import { type Collection, type Csl, IdentifierNotFoundError, type Item } from "../src/schema.ts"
 import { compareEntry, contextAt, extractIds, judgeEntry, sameJournal, textEvidence, verifyFile } from "../src/verify.ts"
-import { addNote, fileName, findItem, findStore, itemKey, keyFromFileName, matchesQuery, readItem, readItems, upsertItem, writeItem } from "../src/store.ts"
+import { addNote, effective, fileName, findItem, findStore, itemKey, keyFromFileName, matchesQuery, readItem, readItems, upsertItem, writeItem } from "../src/store.ts"
 import { checkTitles, handle, report } from "../src/ui.ts"
 
 const normalize = (raw: unknown) => normalizeCsl(Schema.decodeUnknownSync(RawCsl)(raw))
@@ -246,7 +246,7 @@ describe("library", () => {
     writeFileSync(join(dir, "items", fileName("pmid:1")), JSON.stringify(stage1))
     const item = Option.getOrThrow(await ok(readItem("pmid:1")))
     expect(item.tags).toEqual([])
-    expect(item.canonical.language).toBeUndefined()
+    expect("canonical" in item && item.canonical.language).toBeUndefined()
   })
 
   test("language is captured from the registry", () => {
@@ -379,9 +379,9 @@ describe("export rendering", () => {
     expect(noDoi).toContain("https://example.org/paper")
   })
 
-  test("numeric styles are numbered by position; APA keeps the given order", async () => {
+  test("numeric styles are numbered by position; APA follows its own sort", async () => {
     expect((await renderList([attention, numpy], "vancouver", "text")).map((l) => l.slice(0, 10))).toEqual(["1. Vaswani", "2. Harris "])
-    const apa = await renderList([numpy, attention], "apa", "text")
+    const apa = await renderList([attention, numpy], "apa", "text")
     expect(apa[0]).toStartWith("Harris")
     expect(apa[1]).toStartWith("Vaswani")
   })
@@ -415,8 +415,8 @@ describe("export rendering", () => {
 
   test("one batch per list: APA disambiguates the same author and year", async () => {
     const second = { ...numpy, title: "Another paper", DOI: "10.1/other" }
-    const apa = await renderList([numpy, second], "apa", "text")
-    // citeproc letters them in bibliography (title) order; the list keeps ours.
+    // citeproc letters them in bibliography (title) order; with --keep-order the list keeps ours.
+    const apa = await renderList([numpy, second], "apa", "text", true)
     expect(apa[0]).toStartWith("Harris, C. R., & Millman, K. J. (2020b). Array programming")
     expect(apa[1]).toStartWith("Harris, C. R., & Millman, K. J. (2020a). Another paper")
   })
@@ -429,7 +429,7 @@ describe("export rendering", () => {
     expect(lines[3]).toContain("HARRIS")
   })
 
-  test("article number becomes the page; editor, ISBN, place and series are kept", async () => {
+  test("article number becomes the page; ISBN, place and series are kept, editor off journal articles", async () => {
     const { page: _page, ...noPage } = crossref
     const c = normalize({
       ...noPage,
@@ -439,10 +439,13 @@ describe("export rendering", () => {
       "publisher-place": " London ",
       "collection-title": ["Lecture Notes"]
     })
-    expect(c).toMatchObject({ page: "5416", "article-number": "5416", editor: [{ family: "Doe", given: "J" }], ISBN: ["978-0-00-000000-0"], "collection-title": "Lecture Notes" })
-    // PubMed reports the journal's country as the place; it is kept only off journal articles.
+    expect(c).toMatchObject({ page: "5416", "article-number": "5416", ISBN: ["978-0-00-000000-0"], "collection-title": "Lecture Notes" })
+    // PubMed reports the journal's country as the place, and Crossref a journal's handling editor as
+    // editor; both are kept only off journal articles.
     expect(c["publisher-place"]).toBeUndefined()
-    expect(normalize({ ...crossref, type: "book-chapter", "publisher-place": " London " })["publisher-place"]).toBe("London")
+    expect(c.editor).toBeUndefined()
+    const chapter = normalize({ ...crossref, type: "book-chapter", "publisher-place": " London ", editor: [{ family: "Doe", given: "J" }] })
+    expect(chapter).toMatchObject({ "publisher-place": "London", editor: [{ family: "Doe", given: "J" }] })
     expect(normalize({ ...crossref, "article-number": "e1" }).page).toBe("357-362")
     const [line] = await renderList([c], "vancouver", "text")
     expect(line).toContain("5416")
@@ -661,7 +664,7 @@ describe("find and verify with a stubbed HttpClient", () => {
 
   test("verify: a DOI followed by the PMID of the same work shares the text before the DOI", async () => {
     const md = join(dir, "refs.md")
-    writeFileSync(md, "Harris CR, et al. Array programming with NumPy. Nature. 2020. doi:10.1038/s41586-020-2649-2 PMID: 32939066\n")
+    writeFileSync(md, "Harris CR, et al. Array programming with NumPy. Nature. 2020;585:357-62. doi:10.1038/s41586-020-2649-2 PMID: 32939066\n")
     const findings = await ok(Effect.provide(verifyFile(md), stub(200, crossref)))
     expect(findings.map((f) => [f.id, f.status])).toEqual([["doi:10.1038/s41586-020-2649-2", "OK"], ["pmid:32939066", "OK"]])
   })
@@ -728,7 +731,7 @@ describe("export rows", () => {
     await ok(writeCollection({ ...deck, entries: [{ itemId: itemKey(attention, ""), context: "Slide 1" }, { itemId: itemKey(numpy, "") }] }))
     const rows = await ok(exportRows("deck"))
     expect(rows[0]).toMatchObject({ context: "Slide 1" })
-    const lines = await renderList(rows.map((r) => r.item.canonical), "nature", "text")
+    const lines = await renderList(rows.map((r) => effective(r.item)), "nature", "text")
     expect(lines.map((l) => l.slice(0, 11))).toEqual(["1. Vaswani,", "2. Harris, "])
     expect((await ok(exportRows(undefined))).map((r) => r.item.id)).toEqual([itemKey(numpy, ""), itemKey(attention, "")])
 

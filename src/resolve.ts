@@ -10,6 +10,7 @@ import {
   UpstreamRateLimitError,
   type Verification
 } from "./schema.ts"
+import { cleanText, decodeEntities } from "./clean.ts"
 
 export const VERSION = pkg.version
 const USER_AGENT = `ibid/${VERSION} (+https://github.com/waylon256yhw/ibid)`
@@ -65,15 +66,21 @@ const Names = Schema.Array(Schema.Struct({
   name: Schema.optionalKey(Schema.String)
 }))
 
+const RawDate = Schema.optionalKey(Schema.Struct({
+  "date-parts": Schema.optionalKey(Schema.Array(Schema.Array(Schema.Union([Schema.Number, Schema.String, Schema.Null]))))
+}))
+
 // What the registries actually send. Unknown keys are dropped by decoding.
 export const RawCsl = Schema.Struct({
   type: Schema.optionalKey(Schema.String),
   title: StrOrList,
+  subtitle: Schema.optionalKey(StrOrList),
   author: Schema.optionalKey(Names),
   editor: Schema.optionalKey(Names),
-  issued: Schema.optionalKey(Schema.Struct({
-    "date-parts": Schema.optionalKey(Schema.Array(Schema.Array(Schema.Union([Schema.Number, Schema.String, Schema.Null]))))
-  })),
+  issued: RawDate,
+  // Crossref's `issued` is the earliest date, often online-first; references cite the print (issue) year.
+  "published-print": RawDate,
+  "journal-issue": Schema.optionalKey(Schema.Struct({ "published-print": RawDate, "published-online": RawDate })),
   "container-title": Schema.optionalKey(StrOrList),
   "container-title-short": Schema.optionalKey(StrOrList),
   "collection-title": Schema.optionalKey(StrOrList),
@@ -83,6 +90,8 @@ export const RawCsl = Schema.Struct({
   "article-number": Schema.optionalKey(StrOrNum),
   publisher: Schema.optionalKey(Schema.String),
   "publisher-place": Schema.optionalKey(Schema.String),
+  // Crossref's name for publisher-place.
+  "publisher-location": Schema.optionalKey(Schema.String),
   ISSN: Schema.optionalKey(StrOrList),
   ISBN: Schema.optionalKey(StrOrList),
   DOI: Schema.optionalKey(Schema.String),
@@ -129,35 +138,60 @@ export const cslType = (t: string | undefined) => {
   return TYPE_MAP[v] ?? (CSL_TYPES.has(v) ? v : "document")
 }
 
-const one = (v: string | ReadonlyArray<string> | undefined) => (typeof v === "string" ? v : v?.[0])?.replace(/\s+/g, " ").trim() || undefined
-const str = (v: string | number | undefined) => v === undefined ? undefined : String(v).trim() || undefined
+// Every stored text goes through `cleanText`: entities decoded, markup reduced to what citeproc understands.
+const one = (v: string | ReadonlyArray<string> | undefined) => {
+  const s = typeof v === "string" ? v : v?.[0]
+  return s === undefined ? undefined : cleanText(s) || undefined
+}
+const str = (v: string | number | undefined) => v === undefined ? undefined : cleanText(String(v)) || undefined
 
 const decodeCsl = Schema.decodeUnknownSync(Csl)
 
 const names = (ns: typeof Names.Type | undefined) => {
   const out = ns?.map((a) =>
     a.family || a.given
-      ? { ...(a.family && { family: a.family }), ...(a.given && { given: a.given }) }
-      : { literal: a.literal ?? a.name ?? "" }
+      ? { ...(a.family && { family: cleanText(a.family) }), ...(a.given && { given: cleanText(a.given) }) }
+      : { literal: cleanText(a.literal ?? a.name ?? "") }
   ).filter((a) => !("literal" in a) || a.literal)
   return out?.length ? out : undefined
 }
 const list = (v: string | ReadonlyArray<string> | undefined) => {
-  const out = v === undefined ? [] : typeof v === "string" ? [v] : v
+  const out = (v === undefined ? [] : typeof v === "string" ? [v] : v).map(cleanText).filter(Boolean)
   return out.length ? out : undefined
 }
 
+const date = (d: typeof RawCsl.Type["issued"]) => {
+  const parts = d?.["date-parts"]
+    ?.map((ps) => ps.map(Number).filter((n) => Number.isFinite(n) && n > 0))
+    .filter((ps) => ps.length > 0)
+  return parts?.length ? { "date-parts": parts } : undefined
+}
+
+/** `title: subtitle` when the registry has a subtitle the title does not already contain. */
+const fullTitle = (raw: typeof RawCsl.Type) => {
+  const title = one(raw.title) ?? ""
+  const sub = one(raw.subtitle)
+  if (!sub || normalizeTitle(title).includes(normalizeTitle(sub))) return title
+  return /[:?!.]$/.test(title) ? `${title} ${sub}` : `${title}: ${sub}`
+}
+
 export const normalizeCsl = (raw: typeof RawCsl.Type): Csl => {
-  const dateParts = raw.issued?.["date-parts"]
-    ?.map((parts) => parts.map(Number).filter((n) => Number.isFinite(n) && n > 0))
-    .filter((parts) => parts.length > 0)
+  const type = cslType(raw.type)
+  const earliest = date(raw.issued)
+  // The print date, else the date of the issue the work appeared in (an online-only journal's issue).
+  const issue = raw["journal-issue"]
+  const print = date(raw["published-print"]) ?? date(issue?.["published-print"]) ?? date(issue?.["published-online"])
+  const firstYear = (d: typeof print) => d?.["date-parts"][0]?.[0]
   const articleNumber = str(raw["article-number"])
   const fields = {
-    type: cslType(raw.type),
-    title: one(raw.title) ?? "",
+    type,
+    title: fullTitle(raw),
     author: names(raw.author),
-    editor: names(raw.editor),
-    issued: dateParts?.length ? { "date-parts": dateParts } : undefined,
+    // On a journal article Crossref's editor is the journal's handling editor, not an editor of the work.
+    editor: type === "article-journal" ? undefined : names(raw.editor),
+    issued: print ?? earliest,
+    // The online-first date, kept when its year differs from the print year, so either year verifies.
+    "issued-online": print && earliest && firstYear(earliest) !== firstYear(print) ? earliest : undefined,
     "container-title": one(raw["container-title"]),
     "container-title-short": one(raw["container-title-short"]),
     "collection-title": one(raw["collection-title"]),
@@ -166,16 +200,16 @@ export const normalizeCsl = (raw: typeof RawCsl.Type): Csl => {
     // Many journals have an article number and no pages; as `page` every style prints it.
     page: str(raw.page) ?? articleNumber,
     "article-number": articleNumber,
-    publisher: raw.publisher,
+    publisher: one(raw.publisher),
     // PubMed puts the journal's country here ("England"); a place only belongs on books and reports.
-    "publisher-place": cslType(raw.type) === "article-journal" ? undefined : raw["publisher-place"]?.trim() || undefined,
+    "publisher-place": type === "article-journal" ? undefined : one(raw["publisher-place"] ?? raw["publisher-location"]),
     ISSN: list(raw.ISSN),
     ISBN: list(raw.ISBN),
-    DOI: raw.DOI?.trim().toLowerCase(),
+    DOI: raw.DOI && decodeEntities(raw.DOI).trim().toLowerCase(),
     PMID: str(raw.PMID),
     PMCID: str(raw.PMCID),
-    URL: raw.URL,
-    language: raw.language?.trim() || undefined
+    URL: raw.URL && decodeEntities(raw.URL).trim(),
+    language: one(raw.language)
   }
   return decodeCsl(Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)))
 }
@@ -185,7 +219,7 @@ export const normalizeCsl = (raw: typeof RawCsl.Type): Csl => {
 export const TITLE_FUZZY_THRESHOLD = 0.9
 
 export const normalizeTitle = (s: string) =>
-  s.replace(/<[^>]*>/g, " ")
+  decodeEntities(s.replace(/<[^>]*>/g, " "))
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
@@ -209,6 +243,23 @@ export const similarity = (a: string, b: string) => {
   return (2 * hits) / (a.length - 1 + b.length - 1)
 }
 
+/** The part before the first subtitle separator (`: `, ` - `, ` — `), normalized; undefined without one. */
+export const mainTitle = (title: string) => {
+  const parts = title.split(/: | - | — /)
+  return parts.length > 1 ? normalizeTitle(parts[0]!) : undefined
+}
+
+/**
+ * `title` has a subtitle separator, and one side of it (10+ characters) is all of `other` (normalized):
+ * the main title before it, or the title proper after a label ("Expert consensus document: <title>").
+ */
+const mainTitleMatches = (title: string, other: string) => {
+  const main = mainTitle(title)
+  if (main === undefined) return false
+  const rest = normalizeTitle(title.split(/: | - | — /).slice(1).join(" "))
+  return (main.length >= 10 && main === other) || (rest.length >= 10 && rest === other)
+}
+
 export type TitleResult = Pick<Verification, "titleMatch" | "expectedTitle" | "similarity">
 
 export const checkTitle = (expected: string | undefined, actual: string): Effect.Effect<TitleResult, TitleMismatchError> => {
@@ -217,7 +268,7 @@ export const checkTitle = (expected: string | undefined, actual: string): Effect
   const b = normalizeTitle(actual)
   if (a === b) return Effect.succeed({ titleMatch: "VERIFIED", expectedTitle: expected, similarity: 1 })
   const score = Math.round(similarity(a, b) * 1000) / 1000
-  return score >= TITLE_FUZZY_THRESHOLD
+  return score >= TITLE_FUZZY_THRESHOLD || mainTitleMatches(expected, b) || mainTitleMatches(actual, a)
     ? Effect.succeed({ titleMatch: "FUZZY_MATCH", expectedTitle: expected, similarity: score })
     : Effect.fail(new TitleMismatchError({
       expected,

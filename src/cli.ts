@@ -5,45 +5,105 @@ import { Argument, Command, Flag } from "effect/cli"
 import { FetchHttpClient } from "effect/http"
 import { col } from "./col.ts"
 import { deleteItem } from "./collections.ts"
-import { exportRows, FORMATS, render, STYLES, type Style } from "./export.ts"
-import { findCandidates } from "./find.ts"
+import { exportRows, FORMATS, isList, isNumeric, render, resolveStyle, STYLES, styleXml } from "./export.ts"
+import { findCandidates, findLine } from "./find.ts"
 import { VERSION } from "./resolve.ts"
-import { addNote, authorName, fail, findItem, findStore, listItems, matchesQuery, writeItem } from "./store.ts"
-import { checkTitles, evidenceText, expectTitle, failWith, fetchAndStore, handle, json, line, printJson, report, tryEach, usage } from "./ui.ts"
+import { isManual, type Overrides } from "./schema.ts"
+import {
+  addManual,
+  addNote,
+  fail,
+  findItem,
+  findStore,
+  listItems,
+  matchesQuery,
+  OVERRIDE_FIELDS,
+  type OverrideField,
+  parseAuthors,
+  writeItem
+} from "./store.ts"
+import {
+  checkTitles,
+  expectTitle,
+  failWith,
+  fetchAndStore,
+  handle,
+  json,
+  line,
+  overrideItem,
+  overrideLines,
+  printJson,
+  report,
+  showLines,
+  tryEach,
+  usage,
+  withWarnings
+} from "./ui.ts"
 import { verifyFile } from "./verify.ts"
 
 const idArg = Argument.String("id").pipe(Argument.withDescription("doi:…, pmid:…, pmc:…, arxiv:…, 10.x DOI or https://doi.org/ URL"))
 
 const add = Command.make("add", {
-  ids: idArg.pipe(Argument.atLeast(1)),
+  ids: idArg.pipe(Argument.atLeast(0)),
+  manual: Flag.String("manual").pipe(
+    Flag.withDescription("Store a reference that has no identifier, as written (repeatable); its id is manual:<hash of the text>"),
+    Flag.atLeast(0)
+  ),
   expectTitle,
   json
-}, handle(Effect.fn(function*({ expectTitle, ids, json }) {
-  yield* report(yield* fetchAndStore(ids, yield* checkTitles(ids, expectTitle)), json, (r) => line(r.item))
-}))).pipe(Command.withDescription("Fetch, verify and store items by identifier"))
+}, handle(Effect.fn(function*({ expectTitle, ids, json, manual }) {
+  if (ids.length === 0 && manual.length === 0) return yield* usage("give at least one identifier or --manual text")
+  const fetched = yield* fetchAndStore(ids, yield* checkTitles(ids, expectTitle))
+  const manuals = yield* tryEach(manual, (text) => addManual(text).pipe(Effect.map((item) => ({ item }))))
+  yield* report(withWarnings([...fetched, ...manuals]), json, (r) => line(r.item))
+}))).pipe(Command.withDescription("Fetch, verify and store items by identifier, or store reference text with --manual"))
 
 const show = Command.make("show", { id: idArg, json }, handle(Effect.fn(function*({ id, json }) {
   const item = yield* findItem(id)
   if (json) return yield* printJson(item)
-  const c = item.canonical
-  const v = item.verification
-  yield* Console.log(line(item))
-  const rows: Array<[string, string | undefined]> = [
-    ["type", c.type],
-    ["authors", c.author?.map(authorName).join("; ")],
-    ["issued", c.issued?.["date-parts"][0]?.join("-")],
-    ["source", [c["container-title"], c.volume && `vol ${c.volume}`, c.issue && `no ${c.issue}`, c.page && `pp ${c.page}`].filter(Boolean).join(", ")],
-    ["language", c.language],
-    ["DOI", c.DOI],
-    ["PMID", c.PMID],
-    ["PMCID", c.PMCID],
-    ["verified", `${v.titleMatch}${v.similarity !== undefined ? ` (${v.similarity})` : ""} via ${v.url} at ${v.fetchedAt}`],
-    ["sha256", v.sha256],
-    ["tags", item.tags.join(", ")],
-    ...item.evidences.map((e): [string, string] => ["evidence", evidenceText(e)])
-  ]
-  for (const [k, val] of rows) if (val) yield* Console.log(`  ${k}: ${val}`)
-}))).pipe(Command.withDescription("Show one stored item"))
+  for (const l of showLines(item)) yield* Console.log(l)
+}))).pipe(Command.withDescription("Show one stored item (with overrides applied, each next to the registry value)"))
+
+const fieldFlag = (name: string, what: string) => Flag.String(name).pipe(Flag.withDescription(what), Flag.optional)
+
+const override = Command.make("override", {
+  id: idArg,
+  title: fieldFlag("title", "Title"),
+  authors: fieldFlag("authors", "\"Family, Given; Family, Given\"; a name without a comma is a group (literal) name"),
+  year: Flag.Int("year").pipe(Flag.withDescription("Year"), Flag.optional),
+  journal: fieldFlag("journal", "Journal (container title)"),
+  volume: fieldFlag("volume", "Volume"),
+  issue: fieldFlag("issue", "Issue"),
+  page: fieldFlag("page", "Pages or article number"),
+  clear: Flag.Literals("clear", Object.keys(OVERRIDE_FIELDS) as Array<OverrideField>).pipe(
+    Flag.withDescription("Drop the override of this field (repeatable)"),
+    Flag.atLeast(0)
+  ),
+  clearAll: Flag.Boolean("clear-all").pipe(Flag.withDescription("Drop every override"), Flag.withDefault(false)),
+  json
+}, handle(Effect.fn(function*({ authors, clear, clearAll, id, issue, journal, json, page, title, volume, year }) {
+  const given = { title, journal, volume, issue, page }
+  const set: Record<string, unknown> = {}
+  for (const [f, v] of Object.entries(given)) {
+    if (Option.isNone(v)) continue
+    if (!v.value.trim()) return yield* usage(`--${f} must not be empty; use --clear ${f} to drop an override`)
+    set[OVERRIDE_FIELDS[f as OverrideField]] = v.value.trim()
+  }
+  if (Option.isSome(authors)) {
+    const list = parseAuthors(authors.value)
+    if (list.length === 0) return yield* usage("--authors needs at least one name: \"Family, Given; Family, Given\"")
+    set.author = list
+  }
+  if (Option.isSome(year)) {
+    if (year.value < 1) return yield* usage("--year must be a positive year")
+    set.issued = { "date-parts": [[year.value]] }
+  }
+  const saved = yield* overrideItem(id, set as Overrides, clear, clearAll)
+  if (json) return yield* printJson(saved)
+  yield* Console.log(line(saved))
+  for (const l of overrideLines(saved)) yield* Console.log(l)
+  if (!saved.overrides) yield* Console.log("  no overrides")
+}))).pipe(Command.withDescription("Correct fields of a stored record locally; the registry record is kept and shown beside it"))
 
 const ls = Command.make("ls", {
   query: Argument.String("query").pipe(Argument.withDescription("Words that must all match"), Argument.variadic()),
@@ -107,15 +167,28 @@ const where = Command.make("where", { json }, handle(Effect.fn(function*({ json 
 
 const exportCmd = Command.make("export", {
   name: Argument.String("collection").pipe(Argument.withDescription("Collection to export; every stored item when omitted"), Argument.optional),
-  format: Flag.Literals("format", FORMATS).pipe(Flag.withDescription("md, text, bibtex, csl-json or dossier"), Flag.withDefault("md" as const)),
-  style: Flag.Literals("style", Object.keys(STYLES) as Array<Style>).pipe(
-    Flag.withDescription("apa, vancouver, harvard, nature, gb7714 or gb7714-2025 (md and text only)"),
-    Flag.withDefault("vancouver" as Style)
+  format: Flag.Literals("format", FORMATS).pipe(Flag.withDescription("md, text, html, rtf, bibtex, csl-json or dossier"), Flag.withDefault("md" as const)),
+  style: Flag.String("style").pipe(
+    Flag.withDescription(`${Object.keys(STYLES).join(", ")}, a path to a .csl file, or any style name from the CSL repository (fetched once, cached in the store); md, text, html and rtf only`),
+    Flag.withDefault("vancouver")
+  ),
+  keepOrder: Flag.Boolean("keep-order").pipe(
+    Flag.withDescription("Keep collection order in a non-numeric style instead of the style's sort (numeric styles always keep it)"),
+    Flag.withDefault(false)
   )
-}, handle(Effect.fn(function*({ format, name, style }) {
+}, handle(Effect.fn(function*({ format, keepOrder, name, style }) {
   const rows = yield* exportRows(Option.getOrUndefined(name))
-  yield* Console.log(yield* Effect.promise(() => render(rows, format, style)))
-}))).pipe(Command.withDescription("Print a collection (in its order) or the whole store as a reference list, BibTeX, CSL-JSON or a dossier table"))
+  const resolved = isList(format) ? yield* resolveStyle(style) : "vancouver"
+  const manual = rows.filter((r) => isManual(r.item)).length
+  if (isList(format) && manual > 0 && !keepOrder && !isNumeric(yield* Effect.promise(() => styleXml(resolved)))) {
+    yield* Console.error(`note: ${style} sorts its entries; ${manual} manual entr${manual === 1 ? "y is" : "ies are"} listed last (--keep-order keeps collection order)`)
+  }
+  const out = yield* Effect.tryPromise({
+    try: () => render(rows, format, resolved, keepOrder),
+    catch: (e) => usage(`cannot render with style ${style}: ${e instanceof Error ? e.message : String(e)}`)
+  })
+  yield* Console.log(out)
+}))).pipe(Command.withDescription("Print a collection or the whole store as a reference list (Markdown, text, HTML or RTF), BibTeX, CSL-JSON or a dossier table"))
 
 const find = Command.make("find", {
   title: Argument.String("title").pipe(Argument.withDescription("Title words"), Argument.atLeast(1)),
@@ -126,7 +199,7 @@ const find = Command.make("find", {
   if (rows < 1 || rows > 200) return yield* usage("--rows must be between 1 and 200")
   const found = yield* findCandidates(title.join(" "), { rows, ...Option.match(author, { onNone: () => ({}), onSome: (a) => ({ author: a }) }) })
   if (json) return yield* printJson(found)
-  for (const c of found) yield* Console.log([c.similarity, c.doi ? `doi:${c.doi}` : "-", c.year ?? "-", c.firstAuthor ?? "-", c.title].join("\t"))
+  for (const c of found) yield* Console.log(findLine(c))
   if (found.length === 0) yield* Console.error("no candidates")
 }))).pipe(Command.withDescription("Search OpenAlex by title and list candidates (writes nothing; verify with add --expect-title)"))
 
@@ -144,7 +217,7 @@ const verify = Command.make("verify", {
 
 Command.make("ibid").pipe(
   Command.withDescription("Verified local reference manager"),
-  Command.withSubcommands([add, show, ls, rm, tag, untag, note, col, exportCmd, find, verify, init, where]),
+  Command.withSubcommands([add, show, ls, override, rm, tag, untag, note, col, exportCmd, find, verify, init, where]),
   Command.run({ version: VERSION }),
   Effect.provide(Layer.mergeAll(BunServices.layer, FetchHttpClient.layer)),
   BunRuntime.runMain

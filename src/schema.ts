@@ -7,12 +7,17 @@ export const Author = Schema.Struct({
   literal: Schema.optionalKey(Schema.String)
 })
 
+const CslDate = Schema.Struct({ "date-parts": Schema.Array(Schema.Array(Schema.Number)) })
+
 export const Csl = Schema.Struct({
   type: Schema.String,
   title: Schema.String,
   author: Schema.optionalKey(Schema.Array(Author)),
   editor: Schema.optionalKey(Schema.Array(Author)),
-  issued: Schema.optionalKey(Schema.Struct({ "date-parts": Schema.Array(Schema.Array(Schema.Number)) })),
+  // The print (issue) date when the registry has one, else its earliest date.
+  issued: Schema.optionalKey(CslDate),
+  // Not a CSL variable, so styles ignore it: the online-first date, only when its year differs from `issued`.
+  "issued-online": Schema.optionalKey(CslDate),
   "container-title": Schema.optionalKey(Schema.String),
   "container-title-short": Schema.optionalKey(Schema.String),
   "collection-title": Schema.optionalKey(Schema.String),
@@ -45,16 +50,43 @@ export const Verification = Schema.Struct({
 })
 export type Verification = typeof Verification.Type
 
-export const Item = Schema.Struct({
+/** Local corrections typed by the user, under the CSL names of the fields they replace. */
+export const Overrides = Schema.Struct({
+  title: Schema.optionalKey(Schema.String),
+  author: Schema.optionalKey(Schema.Array(Author)),
+  issued: Schema.optionalKey(CslDate),
+  "container-title": Schema.optionalKey(Schema.String),
+  volume: Schema.optionalKey(Schema.String),
+  issue: Schema.optionalKey(Schema.String),
+  page: Schema.optionalKey(Schema.String)
+})
+export type Overrides = typeof Overrides.Type
+
+const shared = {
   id: Schema.String,
-  canonical: Csl,
-  verification: Verification,
   // Entries are opaque and kept verbatim; `note` appends `Note`s.
   evidences: Schema.Array(Schema.Unknown),
   // Sorted and unique. Stage 1 files have no `tags` key.
   tags: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([])))
+}
+
+/** A record fetched from a registry. `canonical` is never edited; `overrides` sit beside it. */
+export const RegistryItem = Schema.Struct({
+  ...shared,
+  canonical: Csl,
+  verification: Verification,
+  overrides: Schema.optionalKey(Overrides)
 })
+export type RegistryItem = typeof RegistryItem.Type
+
+/** A reference with no identifier, kept as the text the user gave (`id` is `manual:<hash>`). */
+export const ManualItem = Schema.Struct({ ...shared, manual: Schema.String })
+export type ManualItem = typeof ManualItem.Type
+
+export const Item = Schema.Union([RegistryItem, ManualItem])
 export type Item = typeof Item.Type
+
+export const isManual = (item: Item): item is ManualItem => "manual" in item
 
 export type Note = { text: string; source?: string; addedAt: string }
 

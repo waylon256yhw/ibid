@@ -33,7 +33,7 @@
 
 ### 1. `LiteratureItem`（单篇文献实体：`items/<id>.json`）
 每篇文献由三部分组成，通过 `Effect Schema` 严格约束：
-* **`canonical`（权威元数据）**：直接从 Crossref / PubMed / OpenAlex / DOI.org 获取并校验通过的标准 `CSL-JSON`（包含准确的 `title`、`author`、`issued`、`container-title`、`volume`、`issue`、`page`、`DOI`、`PMID`）。
+* **`canonical`（权威元数据）**：直接从 Crossref / PubMed / OpenAlex / DOI.org 获取并校验通过的标准 `CSL-JSON`（包含准确的 `title`、`author`、`issued`、`container-title`、`volume`、`issue`、`page`、`DOI`、`PMID`）。`issued` 取卷期（印刷）日期，在线优先日期年份不同时另存 `issued-online`；文本字段入库时解码 HTML 实体、只保留 `<i>`/`<b>`/`<sub>`/`<sup>` 标记；期刊文章不保存 `editor`。
 * **`verification`（核验回执）**：记录数据来源 API、抓取时间戳、原始 payload hash、以及入库时与预期标题的匹配状态（`VERIFIED` / `FUZZY_MATCH`，未提供预期标题时为 `UNCHECKED`）。
 * **`evidences`（二手资料与笔记数组）**：挂载与该文献相关的提炼信息（例如：在某次调研中的核心结论、实验数据摘录、来自 Consensus/Undermind 的匹配度与总结、关联的本地报告路径）。
 

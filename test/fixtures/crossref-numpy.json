@@ -1,0 +1,73 @@
+{
+  "publisher": "Springer Science and Business Media LLC",
+  "issue": "7825",
+  "DOI": "10.1038/s41586-020-2649-2",
+  "type": "journal-article",
+  "page": "357-362",
+  "source": "Crossref",
+  "title": "Array programming with NumPy",
+  "volume": "585",
+  "author": [
+    {
+      "given": "Charles R.",
+      "family": "Harris",
+      "sequence": "first",
+      "affiliation": [],
+      "role": [
+        {
+          "vocabulary": "crossref",
+          "role": "author"
+        }
+      ]
+    },
+    {
+      "ORCID": "https://orcid.org/0000-0002-5263-5070",
+      "authenticated-orcid": false,
+      "given": "K. Jarrod",
+      "family": "Millman",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+        {
+          "vocabulary": "crossref",
+          "role": "author"
+        }
+      ]
+    }
+  ],
+  "container-title": "Nature",
+  "issued": {
+    "date-parts": [
+      [
+        2020,
+        9,
+        16
+      ]
+    ]
+  },
+  "URL": "http://dx.doi.org/10.1038/s41586-020-2649-2",
+  "ISSN": [
+    "0028-0836",
+    "1476-4687"
+  ],
+  "container-title-short": "Nature",
+  "reference-count": 57,
+  "license": [
+    {
+      "start": {
+        "date-parts": [
+          [
+            2020,
+            9,
+            16
+          ]
+        ],
+        "date-time": "2020-09-16T00:00:00Z",
+        "timestamp": 1600214400000
+      },
+      "content-version": "tdm",
+      "delay-in-days": 0,
+      "URL": "https://creativecommons.org/licenses/by/4.0"
+    }
+  ]
+}

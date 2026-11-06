@@ -21,7 +21,7 @@
 ```text
 .ibid/
 ├── items/                      # 1. 单篇文献本地实体（按规范化主键命名）
-│   ├── doi_10.1038_s41586-020-2649-2.json
+│   ├── doi_10.1038%2Fs41586-020-2649-2.json
 │   └── pmid_29618526.json
 ├── collections/                # 2. 按 Project / Article / Presentation 聚合的有序文献清单
 │   ├── 2026-q4-ppt.json
@@ -34,7 +34,7 @@
 ### 1. `LiteratureItem`（单篇文献实体：`items/<id>.json`）
 每篇文献由三部分组成，通过 `Effect Schema` 严格约束：
 * **`canonical`（权威元数据）**：直接从 Crossref / PubMed / OpenAlex / DOI.org 获取并校验通过的标准 `CSL-JSON`（包含准确的 `title`、`author`、`issued`、`container-title`、`volume`、`issue`、`page`、`DOI`、`PMID`）。
-* **`verification`（核验回执）**：记录数据来源 API、抓取时间戳、原始 payload hash、以及入库时与预期标题的匹配状态（`VERIFIED` / `FUZZY_MATCH`）。
+* **`verification`（核验回执）**：记录数据来源 API、抓取时间戳、原始 payload hash、以及入库时与预期标题的匹配状态（`VERIFIED` / `FUZZY_MATCH`，未提供预期标题时为 `UNCHECKED`）。
 * **`evidences`（二手资料与笔记数组）**：挂载与该文献相关的提炼信息（例如：在某次调研中的核心结论、实验数据摘录、来自 Consensus/Undermind 的匹配度与总结、关联的本地报告路径）。
 
 ### 2. `Collection`（交付物有序清单：`collections/<slug>.json`）
@@ -52,12 +52,15 @@
 **核心目标**：不依赖任何臃肿的第三方抓取器，通过 `Effect` 直接手搓对接官方权威 API 的抓取与核验管道，跑通“给 ID/标题 $\rightarrow$ 硬核验 $\rightarrow$ 本地落盘”的最小可用闭环。
 
 1. **基础骨架与 Schema 定义**
-   * 初始化 `Bun + TypeScript + Effect (@effect/cli, @effect/platform)` 工程结构。
-   * 使用 `effect/Schema` 定义 `CslItemSchema`、`LiteratureItemSchema` 与标准错误类型（`IdentifierNotFoundError`、`TitleMismatchError`、`UpstreamRateLimitError`）。
+   * 初始化 `Bun + TypeScript + Effect 4（effect/cli、effect/http、@effect/platform-bun）` 工程结构。
+   * 使用 `effect/Schema` 定义 `CslItemSchema`、`LiteratureItemSchema` 与标准错误类型（`IdentifierNotFoundError`、`TitleMismatchError`、`UpstreamRateLimitError`，以及 `InvalidIdentifierError`、`UpstreamError`、`StoreError`）。
 2. **手搓权威源 Resolver 层**
-   * **DOI Resolver**：直接对接 `https://doi.org/<DOI>`（`Accept: application/vnd.citationstyles.csl+json`）与 Crossref REST API（`https://api.crossref.org/works/<DOI>`）。
-   * **PubMed / PMID Resolver**：对接 NCBI E-utilities (`esummary` / `efetch`) 获取生物医学文献精准元数据与 PMID $\leftrightarrow$ DOI 映射。
-   * **OpenAlex / Title Search Fallback**：支持通过标题 + 第一作者检索候选文献，并强制比对归一化标题相似度（防止张冠李戴）。
+   * **DOI Resolver**：只对接 `https://doi.org/<DOI>` 内容协商（`Accept: application/vnd.citationstyles.csl+json`），一条路径即可拿到 Crossref、DataCite、ISTIC 注册 DOI 的 CSL-JSON；未知 DOI 返回 HTTP 404。不调用 Crossref REST API。
+   * **PubMed / PMID Resolver**：对接 PubMed 引用导出接口 `https://pmc.ncbi.nlm.nih.gov/api/ctxp/v1/pubmed/?format=csl&id=<PMID>`，直接返回含 `DOI`、`PMID`、`PMCID` 与正确 `type` 的 CSL-JSON（该接口仅接受 `Accept: */*`；不存在的 PMID 返回 HTTP 200 + 空数组 `[]`，映射为 `IdentifierNotFoundError`）。不调用 E-utilities。
+   * **arXiv**：不单独对接，`arxiv:<id>` 映射为 DataCite DOI `10.48550/arXiv.<id>`（去掉 `vN` 版本后缀）后走 DOI Resolver。
+   * **归一化**：注册库返回的并非干净 CSL——类型经映射表转换（如 `journal-article` → `article-journal`，未知类型回落为 `document`），DOI 一律小写，作者兼容 `{family, given}` / `{literal}` / `{name}`，日期兼容字符串；仅保存 Schema 声明的 CSL 字段，丢弃参考文献列表、许可证等。
+   * **条目主键与文件名**：有 DOI 时主键为 `doi:<小写 DOI>`（即使是按 PMID 抓取的），否则为 `pmid:<n>`，避免同一篇文献落成两个文件；文件名为 `<scheme>_<encodeURIComponent(其余部分)>.json`，可无损还原主键。
+   * **OpenAlex / Title Search Fallback**：移至 Stage 2。
 3. **Stage 1 基础 CLI 命令**
    * `ibid add <id...>`：支持传入 `doi:...`、`pmid:...`、`arxiv:...`，可选传入 `--expect-title "..."` 进行防幻觉断言，核验通过后写入 `.ibid/items/`。
    * `ibid show <id>` / `ibid ls`：查看本地已入库文献的权威元数据与校验状态。

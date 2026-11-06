@@ -24,9 +24,30 @@
 | 层级 | 选型 | 说明 |
 | :--- | :--- | :--- |
 | **Runtime & 打包** | **Bun + TypeScript** | 毫秒级冷启动，原生支持 `bun:sqlite` (FTS5)，可编译为独立单文件可执行程序 |
-| **核心框架** | **`effect` + `@effect/cli` + `@effect/platform`** | 强类型 `Schema` 校验、多源 API 并发编排、指数退避重试、可插拔 `Layer` 依赖注入 |
+| **核心框架** | **Effect 4：`effect`（含 `effect/cli`、`effect/http`）+ `@effect/platform-bun`** | 强类型 `Schema` 校验、HTTP 抓取与指数退避重试、命令行解析；注意 `@effect/cli` / `@effect/platform` 仅适用于 Effect 3，本项目不使用 |
 | **本地存储** | **File-first (JSON / Markdown) + SQLite 派生索引** | `items/`、`collections/`、`reports/` 纯文本落盘，对 Git 与 Agent `grep`/`read_file` 完全透明 |
 | **排版与导出** | **`@citation-js/core` (内置 CSL) + 可选 `pandoc`/`hayagriva`** | 零外部依赖渲染 Nature / APA / Vancouver / GB-T7714 等引用格式及 `.bib` 导出 |
+
+---
+
+## 用法（Stage 1）
+
+```bash
+bun install
+bun run build                      # 编译为 dist/ibid 单文件可执行程序；开发时也可直接 bun src/cli.ts <命令>
+
+ibid add doi:10.1038/s41586-020-2649-2 --expect-title "Array programming with NumPy"
+ibid add pmid:29618526 arxiv:1706.03762 10.1098/rsif.2017.0387 https://doi.org/10.1038/s41586-020-2649-2
+ibid ls                            # 每行一条：id、核验状态、年份、第一作者、标题、期刊（Tab 分隔）
+ibid show pmid:29618526            # 也可用 doi:/arxiv: 或入库主键查看
+ibid add ... --json / ibid ls --json / ibid show <id> --json   # stdout 只输出 JSON
+```
+
+* 支持的标识符：`doi:...`、`pmid:...`、`arxiv:...`、以 `10.` 开头的裸 DOI、`https://doi.org/...` 链接；其他输入在联网前即报错。
+* `--expect-title`（仅限单个 id）：归一化后完全一致为 `VERIFIED`，相似度 ≥ 0.9 为 `FUZZY_MATCH`，否则报 `TitleMismatchError` 且不写入；未提供时状态为 `UNCHECKED`。
+* 多个 id 时逐个处理，成功的照常写入；任一失败则退出码为 1。
+* 对已入库条目再次 `add` 会刷新权威元数据，但保留 `evidences` 与 PubMed 给出的 `PMID` / `PMCID`；未提供 `--expect-title` 时沿用上次的预期标题重新核验，不会把 `VERIFIED` 降级为 `UNCHECKED`。
+* 存储位置为当前目录下的 `.ibid/items/`，可用环境变量 `IBID_DIR` 覆盖（此时为 `$IBID_DIR/items/`）。
 
 ---
 
@@ -35,7 +56,7 @@
 详细的架构设计与阶段规划见 [`docs/design-brief.md`](./docs/design-brief.md)。
 
 - **Stage 1：初级阶段 —— 核心本体与手搓抓取落地**
-  跑通最小闭环：手搓权威源 Resolver（DOI Content Negotiation / Crossref / PubMed / OpenAlex），实现单篇文献的抓取、标题防伪核验与本地 `items/` 落盘管理。
+  跑通最小闭环：手搓权威源 Resolver（doi.org Content Negotiation / PubMed 引用导出接口），实现单篇文献的抓取、标题防伪核验与本地 `items/` 落盘管理。（按标题检索候选文献的 OpenAlex 能力移至 Stage 2。）
 - **Stage 2：第二阶段 —— 文献列表快速编排与多样化导出**
   围绕具体交付物（PPT、文章、课题）提供丰富的 CLI 列表操作（有序集合编排、批量校验 `.bib`/文稿、标签与检索）及多样化格式输出（多样式 Markdown 参考文献表、BibTeX、CSL-JSON、带二手摘要的文献速查表）。
 - **Stage 3：第三阶段（远期）—— 外部 Connector 与 MCP 生态拓展**

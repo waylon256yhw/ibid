@@ -1,0 +1,43 @@
+{
+  "source": "PubMed",
+  "accessed": {
+    "date-parts": [
+      [
+        2026,
+        11,
+        6
+      ]
+    ]
+  },
+  "id": "pmid:29618526",
+  "title": "Opportunities and obstacles for deep learning in biology and medicine",
+  "author": [
+    {
+      "family": "Ching",
+      "given": "Travers"
+    },
+    {
+      "family": "Himmelstein",
+      "given": "Daniel S"
+    }
+  ],
+  "container-title-short": "J R Soc Interface",
+  "container-title": "Journal of the Royal Society, Interface",
+  "publisher-place": "England",
+  "ISSN": "1742-5662",
+  "issued": {
+    "date-parts": [
+      [
+        2018,
+        4
+      ]
+    ]
+  },
+  "page": "20170387",
+  "volume": "15",
+  "issue": "141",
+  "PMID": "29618526",
+  "PMCID": "PMC5938574",
+  "DOI": "10.1098/rsif.2017.0387",
+  "type": "article-journal"
+}

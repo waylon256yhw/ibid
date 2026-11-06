@@ -1,0 +1,71 @@
+---
+title: 文献入库与条目管理
+description: 支持的唯一标识符、标题防伪核验规则、入库元数据归一化以及本地条目的检索、标签与笔记管理。
+sidebar:
+  order: 1
+---
+
+`ibid` 通过权威源注册库抓取并验证文献元数据，确保入库条目零幻觉。
+
+## 抓取与核验入库（`add`）
+
+```bash
+ibid add doi:10.1038/s41586-020-2649-2 --expect-title "Array programming with NumPy"
+ibid add pmid:29618526 arxiv:1706.03762 10.1098/rsif.2017.0387 https://doi.org/10.1038/s41586-020-2649-2
+ibid add doi:10.1038/s41586-020-2649-2 --json
+```
+
+### 支持的标识符格式
+
+- `doi:<DOI>`、以 `10.` 开头的裸 DOI、以及 `https://doi.org/...`（或 `http://dx.doi.org/...`）链接：通过 `doi.org` 内容协商（`Accept: application/vnd.citationstyles.csl+json`）直接获取 Crossref、DataCite、ISTIC 等注册机构的 CSL-JSON；
+- `pmid:<digits>`：通过 NCBI Literature Citation Exporter（`/api/ctxp/v1/pubmed/?format=csl`）获取；
+- `pmc:PMC<digits>`（或 `pmc:<digits>`）：通过 PMC 引用导出接口（`/api/ctxp/v1/pmc/?format=csl`）抓取；
+- `arxiv:<id>`：自动剥离末尾 `vN` 版本号，映射为 DataCite DOI `10.48550/arXiv.<id>` 后走 DOI 解析；
+- 其他格式的输入在发起任何网络请求前即报 `InvalidIdentifierError`。
+
+<Aside type="note" title="主键归一规则">
+  只要权威源返回的记录含有 `DOI`，本地落盘主键一律为 `doi:<小写 DOI>`（即使最初是按 `pmid:` 或 `pmc:` 抓取的），避免同一篇文献在库中产生重复文件。无 DOI 时主键为 `pmid:<n>`，再无则为 `pmc:<n>`。
+</Aside>
+
+### 标题防伪断言（`--expect-title`）
+
+- `--expect-title` 可重复：要么完全不传，要么按命令行中标识符的顺序**为每个标识符各传一次**（如 `ibid add A B --expect-title "标题A" --expect-title "标题B"`）；个数不符报用法错误。
+- **匹配状态判定**：
+  - `VERIFIED`：归一化（解码 HTML 实体、剥离标签、NFKD 去重音、转小写、合并标点空白）后完全一致（相似度 `1`）；
+  - `FUZZY_MATCH`：双字符 Dice 系数相似度 $\ge 0.9$；或者**一方带副标题或前缀标签**（以 `: `、` - `、` — ` 分隔），且分隔符前的主标题或分隔符后的正标题（归一化后至少 10 个字符）与另一方完整标题完全一致（例如 `Biomechanics: Mechanical Properties of Living Tissues` 对 `Biomechanics`，或 `Expert consensus document: <标题>` 对 `<标题>`）；
+  - `TitleMismatchError`：不满足上述条件时报错且**拒绝写入本地库**；
+  - `UNCHECKED`：未提供 `--expect-title` 时的默认状态。
+
+### 入库归一化与清洗细节
+
+- **出版日期优先级（`issued` vs `issued-online`）**：
+  `issued` 优先取印刷日期（`published-print`，其次所在期的 `journal-issue.published-print`，再次所在期的 `journal-issue.published-online`），即参考文献表所著录的卷期年份；都没有时才取注册库的 `issued`（最早日期，常为在线优先发表日期）。当在线优先日期的年份与印刷年份不同时，另存为 `issued-online`（非标准 CSL 字段，引文样式不会输出），在 `verify` 核验时两个年份均视为一致。
+- **文章编号与补充字段**：
+  保存注册库给出的 `article-number`；当记录没有 `page` 时，自动以 `article-number` 作为 `page` 存入，从而保证所有引文样式都能正常输出文章编号。另保存（如有）`editor`（**期刊文章除外**：Crossref 在 `article-journal` 上给出的是期刊责任编辑）、`ISBN`、`publisher-place`（同样接受 Crossref 的 `publisher-location`，但期刊文章除外，因为 PubMed 在此填入的是期刊所在国如 `England`）、`collection-title` 与 `language`。
+- **HTML 实体与行内标签清洗**：
+  入库时所有文本字段解码命名与数字 HTML 实体（如 `&amp;` $\rightarrow$ `&`、`&#252;` $\rightarrow$ `ü`）。标记仅保留 citeproc 认识的 `<i>`、`<b>`、`<sub>`、`<sup>`（`<em>`、`<strong>` 以及 JATS 的 `<jats:italic>`、`<jats:bold>`、`<jats:sub>`、`<jats:sup>` 自动映射过去），其余标签剥离但保留内部文字；不构成标签的小于号（如 `p < 0.05`）原样保留。若注册库单独给出了 `subtitle` 且主标题中尚未包含，自动合并为 `标题: 副标题`。
+- **超时与并发**：
+  对注册库与 OpenAlex 的每次请求（含指数退避重试）限时 **20 秒**，超时报 `UpstreamError`。批量传入多个标识符时以最高 3 并发抓取、串行落盘；成功的照常写入，任一失败则最终退出码为 `1`。
+- **重复 `add` 的幂等合并**：
+  对已入库条目再次执行 `add` 会刷新权威元数据 `canonical`，但完整保留已有的 `evidences`、`tags`、本地更正 [`overrides`](/overrides-and-manual/) 以及 PubMed 给出的 `PMID` / `PMCID`；若刷新时未传 `--expect-title`，会自动沿用上次核验通过的预期标题重新与注册库标题核验，不会将 `VERIFIED` 降级为 `UNCHECKED`。
+- **异常作者列表告警**：
+  当注册库记录**没有作者**或**作者超过 50 人**（常见于将整个协作组成员全部列入的临床指南）时，`add` 与 `col add` 会逐条发出提示：人类模式下在 `stderr` 输出 `warning<Tab>输入<Tab>说明`（给出人数并建议用 `ibid override` 更正）；`--json` 模式下在该条结果的 `warnings` 数组中返回。提示不改变退出码；已用 `override` 更正过作者的条目不再提示。
+
+---
+
+## 检索、查看与管理条目
+
+```bash
+ibid ls                                # 每行一条：id、核验状态、年份、第一作者、标题、期刊（Tab 分隔）
+ibid ls numpy 2020                     # 多词检索：每个词都须（不区分大小写）出现在 id、标题、作者、年份、期刊或标签中
+ibid ls --tag review                   # 按标签过滤
+ibid show pmid:29618526                # 也可用 doi:/pmc:/arxiv:/裸 DOI/doi.org 链接查看
+ibid tag pmid:29618526 dl review       # 添加标签（去重、排序后存于条目 tags 数组）
+ibid untag pmid:29618526 review        # 移除指定标签
+ibid note arxiv:1706.03762 "提出 Transformer" --source "我的阅读笔记"
+ibid rm doi:10.1038/s41586-020-2649-2  # 被集合引用时拒绝并列出集合；加 --force 一并从这些集合移除
+```
+
+- **统一的标识符反查**：所有接受条目标识符的命令（`show`、`override`、`tag`、`untag`、`note`、`rm`、`col add`、`col rm`、`col move`）均支持 `doi:`、`pmid:`、`pmc:`、`arxiv:`、裸 DOI、doi.org 链接及 `manual:<hash>`。即使条目是以 `doi:` 为主键入库的，直接传其 `pmid:` 或 `pmc:` 也能在本地库中定位到它。
+- **`show` 的输出格式**：除了摘要行与基础字段外，还会展示 `language`、`tags`、每条 `evidence` 的文本，以及每一项 [`override`](/overrides-and-manual/) 与注册库原值的对照。当作者超过 10 人时，终端只显示前 10 人并后接 `… (N authors)`；月、日自动补零（如 `2023-05-16`）。`show --json`、`ls --json` 与 `export --format csl-json` 仍输出完整无截断的记录。
+- **沉淀阅读笔记（`note`）**：`ibid note <id> <text> [--source ...]` 会向条目的 `evidences` 数组追加一条带时间戳的笔记对象，已有的任何异构 `evidences` 条目均原样保留。

@@ -1,0 +1,98 @@
+---
+title: 概览与快速开始
+description: 面向 AI Agent 与命令行工作流的轻量级本地文献管理与引用核验工具。
+sidebar:
+  order: 0
+---
+
+`ibid`（源自拉丁语 *ibidem*，“出处同上”）是一个专为 AI Agent 与命令行工作流设计的轻量级本地文献管理与引用核验工具。
+
+它不提供笨重的桌面 GUI，也不内置脆弱的网页 HTML 爬虫，而是专注于解决学术写作、数据整理与制作组会 PPT 过程中的核心痛点：**把大模型的“概率性文献搜索”与“确定性的元数据核验、项目归集及格式化输出”彻底解耦**。
+
+## 核心设计原则
+
+1. **零幻觉防火墙（Deterministic Verification）**
+   严禁 Agent 凭记忆手写或拼接文献条目（作者、年份、期刊、期卷号、DOI）。Agent 只传递唯一标识符（`DOI` / `PMID` / `PMCID` / `arXiv ID`）与预期标题，`ibid` 负责直接向权威注册库（Crossref、PubMed、PMC、DataCite）拉取标准 `CSL-JSON`，通过 `Effect Schema` 做强类型校验与标题匹配度核验后方可入库。
+2. **有状态的本地产物（Stateful Local Artifacts）**
+   校验不是一锤子买卖。入库后的单篇文献、二手调研结论（如来自 Consensus / Undermind 的提炼或 Agent 的阅读笔记）、本地字段更正、以及按具体交付物（Project / Article / Presentation）编排的有序引用清单，全部以对 Git 和 Agent 透明的纯文本结构（JSON）持久化在本地。
+3. **OS 级原子 CLI 体验（Unix & Agent Ergonomics）**
+   提供干净、可组合的命令行接口。支持面向人类的紧凑终端输出，以及面向 Agent 的严格 `--json` 结构化输出。
+
+## 安装与快速上手
+
+<Steps>
+  <Step title="安装依赖并编译">
+    需要 [Bun](https://bun.sh) 1.3 或更高版本。
+
+    ```bash
+    bun install
+    bun run build   # 编译为 dist/ibid 单文件可执行程序；开发时也可直接 bun src/cli.ts <命令>
+    ```
+  </Step>
+  <Step title="检索并核验入库">
+    用 `find` 按标题查找候选，再用 `add --expect-title` 强核验入库：
+
+    ```bash
+    ibid find "Array programming with NumPy" --author Harris
+    ibid add doi:10.1038/s41586-020-2649-2 --expect-title "Array programming with NumPy"
+    ibid add pmid:29618526 arxiv:1706.03762 10.1098/rsif.2017.0387
+    ibid ls
+    ibid show pmid:29618526
+    ```
+  </Step>
+  <Step title="按交付物归集并导出">
+    创建集合、按引用顺序编排条目，并导出为所需格式或样式：
+
+    ```bash
+    ibid col create q4-deck --title "Q4 组会"
+    ibid col add q4-deck pmid:29618526 arxiv:1706.03762 10.1038/s41586-020-2649-2 --context "Slide 3"
+    ibid export q4-deck --style gb7714
+    ibid export q4-deck --format rtf | pbcopy
+    ```
+  </Step>
+  <Step title="交叉核验现有文稿">
+    直接审计 `.bib`、Markdown 或 Word（`.docx`）文稿中的引用元数据与编号：
+
+    ```bash
+    ibid verify draft.bib
+    ibid verify manuscript.docx
+    ```
+  </Step>
+</Steps>
+
+## 存储位置（库发现规则）
+
+所有命令按同一优先级确定本地库根目录（其下包含 `items/`、`collections/` 及按需缓存的 `styles/`），运行 `ibid where` 可打印当前生效路径及命中的规则：
+
+1. **`IBID_DIR`**：设置了环境变量 `IBID_DIR` 时使用 `$IBID_DIR`；
+2. **`ancestor`**：否则从当前工作目录向上逐级查找，使用最近一个含 `.ibid/` 的目录下的 `.ibid/`，因此在项目子目录中运行同样有效；
+3. **`global`**：否则使用全局库 `${XDG_DATA_HOME:-~/.local/share}/ibid`。
+
+```bash
+ibid init           # 在当前目录创建 .ibid/，让当前项目拥有独立的文献库
+ibid where          # 输出：<路径>\t<IBID_DIR | ancestor | global>
+ibid where --json   # 输出：{"root": "...", "rule": "..."}
+```
+
+## 文档章节导航
+
+<CardGrid>
+  <Card title="文献入库与条目管理" icon="ph:books">
+    查看 [文献入库与条目管理](/items/)，了解支持的标识符、`--expect-title` 匹配规则、入库归一化与标签/笔记操作。
+  </Card>
+  <Card title="本地更正与无标识符文献" icon="ph:pencil-line">
+    查看 [本地更正与无标识符文献](/overrides-and-manual/)，了解 `override` 字段修正与 `add --manual` 手工条目。
+  </Card>
+  <Card title="交付物集合编排" icon="ph:list-numbers">
+    查看 [交付物集合编排](/collections/)，了解如何围绕 PPT、论文或课题维护有序引用清单。
+  </Card>
+  <Card title="导出与引文样式" icon="ph:export">
+    查看 [导出与引文样式](/export/)，了解 7 种导出格式、CSL 仓库样式自动拉取与中英混排规则。
+  </Card>
+  <Card title="文稿核验与按标题检索" icon="ph:shield-check">
+    查看 [文稿核验与按标题检索](/verify-and-find/)，了解 `.bib`/`.md`/`.docx` 核验、引用编号检查与 OpenAlex 检索。
+  </Card>
+  <Card title="Agent 契约与路线图" icon="ph:robot">
+    查看 [Agent 契约与路线图](/agent-and-roadmap/)，了解 `--json` 结构化错误契约、本地存储模型与三阶段演进规划。
+  </Card>
+</CardGrid>

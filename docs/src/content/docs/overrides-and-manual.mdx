@@ -1,0 +1,59 @@
+---
+title: 本地更正与无标识符文献
+description: 在不篡改权威源记录的前提下修正元数据（override），以及管理无 DOI/PMID 的文献（manual）。
+sidebar:
+  order: 2
+---
+
+本地更正（`overrides`）与手工条目（`manual`）是 `ibid` 中**仅有的两类不取自权威注册库的数据**，因此在存储和展示时始终单独存放、单独标示。
+
+## 本地字段更正（`override`）
+
+当权威注册库的元数据存在登记瑕疵（例如把数百名协作组成员全部塞进作者列表、缺少作者、或在线年份/卷期有误）时，可用 `ibid override` 在本地修正，而**不修改注册库原始记录 `canonical`**：
+
+```bash
+# 更正作者列表（以分号 ; 分隔；含逗号的按“姓, 名”拆分，不含逗号的作为团体作者 literal）
+ibid override 10.1001/jama.2023.5942 --authors "Joseph, Philip; Roy, Ambuj; Lonn, Eva"
+ibid override 10.1001/jama.2023.5942 --authors "PURE Investigators; Smith, John, Jr"
+
+# 更正其他字段
+ibid override <id> --title "New Title" --year 2023 --journal "J Name" --volume 10 --issue 2 --page "100-110"
+
+# 清除单项或全部更正
+ibid override <id> --clear authors --clear year
+ibid override <id> --clear-all
+```
+
+### `override` 的存储与生效规则
+
+- **可更正字段**：仅限 `--title`、`--authors`、`--year`、`--journal`、`--volume`、`--issue`、`--page` 七项；每次调用至少给出一个设置项或清除项，否则报用法错误。同时传入 `--clear`/`--clear-all` 与新值时，先执行清除再写入新值。
+- **与 `canonical` 隔离**：注册库原始记录 `canonical` 不做任何修改；更正内容存于条目顶层的 `overrides` 对象中，键名为所替代的 CSL 字段（`title`、`author`、`issued`、`container-title`、`volume`、`issue`、`page`）。当所有更正被清除后，`overrides` 键自动移除。
+- **全局生效范围**：所有导出格式（`export`）、`ls` 与 `col show` 的摘要行、`ls` 多词检索、`col sort` 排序，以及 `verify` 使用本地库中条目比对时，使用的都是**应用更正后的生效记录（`effective`）**。
+  - 更正年份（`issued`）时，不再使用注册库的 `issued-online`；
+  - 更正期刊（`container-title`）时，不再使用注册库的期刊简称 `container-title-short`。
+- **重抓保留与标题核验**：再次 `add` 刷新注册库记录时，原有的 `overrides` 会完整保留；但 `add --expect-title` 始终与**注册库原始标题**比对，而非更正后的标题。
+- **显式标识**：含有本地更正的条目在摘要行的状态列末尾带星号 `*`（如 `VERIFIED*`、`UNCHECKED*`）。运行 `ibid show <id>` 时，会在底部逐项列出更正值及其掩盖的注册库原值；`show --json` 与 `ls --json` 中 `canonical` 与 `overrides` 为两个独立的顶层键。
+
+---
+
+## 无标识符文献（`add --manual`）
+
+对于没有 DOI、PMID 或 arXiv 号的文献（如 WHO 报告、政府白皮书、早期专著、学位论文等），可使用 `add --manual` 录入原样文献文本：
+
+```bash
+ibid add --manual "WHO. Global report on hypertension. Geneva: WHO; 2023."
+```
+
+- `--manual` 可重复传入，也可在同一次 `ibid add` 命令中与普通标识符同时给出。
+- **确定性主键**：条目的 `id` 为 `manual:<规范化文本的 10 位 SHA-256 哈希>`（NFC 归一化并合并多余空白）。同一段文本重复添加会命中同一条目，并保留其已有的标签与 `evidences` 笔记。
+- **状态与集合编排**：手工条目的状态固定为 `MANUAL`，在集合中与普通条目完全一致地参与编排（支持 `col add <集合> manual:…`、`--at`、`col move`、`col rm`），因此集合序号 `[1]`、`[2]` 可与文稿的参考文献表完全对齐。
+- **限制**：对手工条目执行 `ibid override` 会报用法错误（如需修改文本，直接用新的文本执行 `add --manual`）；`verify` 不会核验手工条目。
+
+### 手工条目在各导出格式中的表现
+
+| 导出格式 | 渲染行为 |
+| :--- | :--- |
+| `md` / `text` / `html` / `rtf` | 在其所在位置原样输出文本。**编号样式**（如 `vancouver`、`gb7714`、`nature`）中与相邻条目使用相同格式的序号（如 `2.`、`[2]`）；**非编号排序样式**（如 `apa`、`harvard`）默认将手工条目排在末尾并在 `stderr` 提示一行，传入 `--keep-order` 时则保持集合原位。 |
+| `bibtex` | 输出 `@misc{manual<哈希>, note = {<转义后的文本>}}`。 |
+| `csl-json` | 输出 `{"id": "manual:…", "type": "document", "title": "<文本>", "custom": {"ibid-manual": true}}`。 |
+| `dossier` | Markdown 表格中“作者年份”一栏显示为 `(manual entry)`。 |

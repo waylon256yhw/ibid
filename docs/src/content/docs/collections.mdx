@@ -1,0 +1,57 @@
+---
+title: 交付物集合编排
+description: 围绕具体 PPT、文章草稿或子课题维护严格保序的文献引用清单（Collections）。
+sidebar:
+  order: 3
+---
+
+集合（Collection）是面向单个具体交付物（一份组会 PPT、一篇论文草稿、一个课题）的**有序文献清单**，保存在本地库的 `collections/<name>.json` 中。
+
+集合中的位置从 `1` 开始计数，直接对应导出时的引用序号 `[1]`、`[2]`、`[3]`……
+
+## 集合命令速览
+
+```bash
+# 创建集合（名称须匹配 ^[a-z0-9][a-z0-9._-]*$）
+ibid col create q4-deck --title "Q4 组会"
+
+# 添加条目（未入库的标识符会自动走 add 的抓取核验流程）
+ibid col add q4-deck pmid:29618526 arxiv:1706.03762 --context "Slide 3"
+
+# 对已在集合中的条目再次 col add：不会产生重复，仅更新其 context / section
+ibid col add q4-deck pmid:29618526 --section "Introduction"
+
+# 将新条目插入到指定位置（1-based）
+ibid col add q4-deck 10.1038/s41586-020-2649-2 --at 1
+
+# 查看集合详情与所有集合列表
+ibid col show q4-deck
+ibid col ls
+
+# 移动、排序、合并与移除
+ibid col move q4-deck 3 1                          # 将第 3 位（也可传标识符）移至第 1 位
+ibid col sort q4-deck --by year --desc             # 按 year | author | title 稳定排序
+ibid col merge q4-deck old-deck                    # 将来源集合中目标尚未包含的条目按序追加（来源不变）
+ibid col rm q4-deck 2 arxiv:1706.03762             # 按位置序号或条目标识符移除（基于原始列表一次性解析位置）
+ibid col delete old-deck                           # 删除集合文件（库中单篇条目保留）
+```
+
+## 编排与去重细节
+
+- **集合命名规范**：集合名必须匹配正则 `^[a-z0-9][a-z0-9._-]*$`（以小写字母或数字开头，仅含小写字母、数字、`.`、`_`、`-`），否则报 `CollectionError`。
+- **天然防重**：`col add` 与 `col merge` 从不产生重复条目。对已在集合中的条目再次执行 `col add` 时，条目保持原位不变；若传入了 `--context` 或 `--section`，则原地更新该条目的上下文备注。
+- **边加边核验（`--expect-title`）**：`col add` 同样支持可重复的 `--expect-title`（规则与 `ibid add` 完全相同）。当传入 `--expect-title` 时，命令中的每个标识符（包括已在本地库中的条目）都会重新向权威源抓取并核验标题。
+- **紧凑的 `--json` 结构**：
+  在 `col show --json`（以及返回集合状态的 `col rm`、`col move`、`col sort`、`col merge` 的 `--json` 输出）中，每个 `entries[i].item` 仅内嵌**紧凑摘要对象**：
+  ```json
+  {
+    "id": "doi:10.1038/s41586-020-2649-2",
+    "status": "VERIFIED",
+    "year": 2020,
+    "firstAuthor": "Harris",
+    "authorCount": 35,
+    "title": "Array programming with NumPy",
+    "journal": "Nature"
+  }
+  ```
+  摘要取自应用本地更正（`overrides`）后的记录，`status` 可带 `*`；若条目文件已不在库中则为 `null`。如需完整 CSL 记录，请使用 `ibid show <id> --json`、`ibid ls --json` 或 `ibid export <col> --format csl-json`。

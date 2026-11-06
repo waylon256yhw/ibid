@@ -1,0 +1,86 @@
+---
+title: 文稿核验与按标题检索
+description: 使用 find 在 OpenAlex 中按标题检索候选，使用 verify 对 .bib、Markdown 及 Word (.docx) 文稿做元数据与编号审计。
+sidebar:
+  order: 5
+---
+
+`ibid` 提供两个只读命令（均不向本地库写入任何条目）：`find` 用于在只知道论文标题时查找候选 DOI，`verify` 用于审计现有文稿或 `.bib` 文件中的引用错误与幻觉。
+
+## 按标题检索候选文献（`find`）
+
+```bash
+ibid find "Attention is all you need"
+ibid find "Array programming with NumPy" --author Harris --rows 10
+ibid find "Deep learning" --author LeCun --json
+```
+
+- **检索与回退策略**：通过 OpenAlex 接口检索，优先使用要求每个查询词都出现在标题中的 `filter=title.search:<query>`；若无结果则自动回退到更宽松的全文 `search=<query>`。
+- **排序与过滤**：结果按与查询标题的双字符 Dice 相似度降序排列；传入 `--author <姓氏>` 时仅保留作者列表中含该姓氏的候选。
+- **输出字段**：每行以 Tab 分隔输出：`相似度`、`DOI`、`年份`、`OpenAlex 作品类型`（如 `article`、`book`、`review`、`book-review`，便于区分专著与其书评）、`第一作者`、`标题`。
+- **API 配额与密钥**：OpenAlex 在未提供密钥时按 IP 共享每日免费额度（约 100 次检索）；设置环境变量 `OPENALEX_API_KEY` 后会自动以 `api_key` 参数发送。若额度耗尽触发 HTTP 429，`ibid` 不会无效重试，而是直接给出一行提示。
+- **入库确认**：确认候选后，请使用 `ibid add doi:<DOI> --expect-title "<标题>"` 正式核验入库。
+
+---
+
+## 交叉核验文稿与 `.bib`（`verify`）
+
+```bash
+ibid verify draft.bib
+ibid verify draft.md
+ibid verify manuscript.docx
+ibid verify manuscript.docx --json
+```
+
+`verify` 不会修改本地库。若待查标识符已在本地库中，直接使用本地记录（应用 [`overrides`](/overrides-and-manual/) 后的生效记录）；否则以最高 3 并发向权威注册库实时抓取。输出每行包含：`状态`、`位置`（引用键或行号）、`标识符`、`详情`；只要有任何一条不是 `OK`，命令退出码即为 `1`。若输入文件本身无法读取或解析，作为用法错误（`UsageError`）退出。
+
+### 1. 核验 `.bib` 文件
+
+- **有标识符的条目**（含 `doi`、`pmid` 或在 `eprint`/`url`/`journal` 中含 `arXiv` 号）：逐项与权威源比对以下 7 个字段：
+  - **标题**：规则与 `--expect-title` 相同（精确、相似度 $\ge 0.9$，或带副标题时的主标题匹配）；
+  - **年份**：与印刷年份或在线优先年份（`issued-online`）任一匹配即算一致；
+  - **第一作者姓氏**：归一化后比对；
+  - **期刊名（`journal` / `booktitle`）**：先剥离括号内容（如 `Antioxidants (Basel)`、`(BBA)`），再与注册库的 `container-title` 或 `container-title-short` 比对。归一化后相等、模糊相等（$\ge 0.9$）、去掉 `of`/`the`/`and`/`et` 等虚词后每个词均为对方对应词的前缀（如 `J R Soc Interface`、`Nat. Commun.`、`Biochim Biophys Acta Mol Basis Dis`），或一方为另一方的首字母缩写（如 `PNAS`、`NEJM`、`JACC`）均视为一致。若注册库记录是没有正式期刊的 arXiv 预印本，写成 `arXiv`、`arXiv preprint arXiv:<id>` 或 `CoRR`（及卷号 `abs/<id>`）均视为惯例写法，不报错；
+  - **卷（`volume`）、期（`issue`）、起始页（`page`）**：忽略前导零与电子页码前的字母 `e`（如 `e2301006` 与 `2301006` 一致）。
+- **状态判定优先级**：
+  - `MISMATCH`：条目中存在与权威源矛盾的字段；
+  - `CHECK`：条目声称了权威源记录中没有的字段（例如给未发表的 arXiv 预印本编造了页码或期号），或者条目自身缺少 `title`、`author`、`year` 三要素之一；
+  - `OK`：全部吻合；
+  - `NOT_FOUND`：注册库中不存在该标识符；
+  - `UNIDENTIFIED`：条目中没有任何标识符。此时会自动调用 OpenAlex 按标题检索，若找到相似度 $\ge 0.9$ 的候选则在详情中给出最佳匹配 DOI。
+
+### 2. 核验 Markdown 与纯文本文件
+
+- **提取范围**：自动提取正文与参考文献中的裸 DOI、Markdown 链接 `[doi:…](https://doi.org/…)`、尖括号链接、含括号的 SICI DOI、`PMID: 12345` 以及 `arXiv:1706.03762`（支持全角冒号与中文标点边界）。Markdown 链接的显示文字与目标地址若各自含 DOI，会分别提取并独立核验。
+- **上下文隔离（Context Slicing）**：
+  - 若标识符所在行属于列表项（支持 `-`、`*`、`1.`、`1)`、`1、`、`1．`、`[1]`、`［1］` 及制表符编号 `\t1\t`，包含到下一个列表标记或空行为止的续行），上下文为该列表项；
+  - 若为 Markdown 表格行（以 `|` 开头），该行自成一个上下文；
+  - 否则为以空行分隔的自然段。
+  - **多标识符切分防张冠李戴**：当同一个上下文内出现多个不同文献的标识符时，每个标识符只能由**上一个标识符结束位置与本标识符开始位置之间**的文字为其作证（紧邻且指向同一篇文献的 DOI 与 PMID 共享前面的文字）。因此，无论是在同一句话（如 `Harris 2020 (doi:X) and Vaswani 2017 (doi:Y)`）还是无列表标记的多行参考文献中把两个 DOI 互换，都会立即被抓出并报 `CHECK`。
+- **佐证与细节完整性判定**：
+  - 上下文中出现权威源标题（精确、相似度 $\ge 0.9$ 或主标题）或同时出现**第一作者姓氏 + 年份**（支持中文姓名/标题子串匹配及 `2011年` 写法）时视为有据；否则报 `CHECK` 并列出权威源的标题、作者与年份供人工核对；
+  - 一旦匹配到标题（说明这是一条**参考文献条目**而非正文内夹注，表格行除外），`verify` 还会进一步检查该条目中（除标识符与链接本身外）是否完整出现了权威源的**年份、卷号、起始页或文章编号**（仅查权威源有的字段，`2057-62`、`e2301006` 均认可），缺失任何一项都会报 `CHECK`；
+  - 在多数列表项都带标识符的连续列表块中，若某几项没有任何标识符，会作为 `UNIDENTIFIED` 报出行号与开头摘录。
+
+### 3. 直接核验 Word（`.docx`）文件
+
+`ibid verify manuscript.docx` 无需预先转换格式即可直接读取 `.docx`：
+
+- 每个 Word 段落（`<w:p>`）对应一行，与 macOS `textutil -convert txt` 的输出行号严格一致，因此报告中的 `line N` 就是文稿的第 `N` 个段落；脚注与尾注附在正文之后。
+- **修订与域代码处理**：跟踪修订（Track Changes）中的插入内容保留、删除与移走内容自动忽略；Zotero、EndNote 的复杂域代码只提取最终显示的文本。
+- **隐藏超链接还原**：当文字超链接的目标地址含有 DOI 而显示文字中未包含该 DOI（例如仅显示为 `Full text` 或标题文字）时，自动展开为 `[显示文字](链接)` 以便核验。
+- **自动编号还原**：使用 Word 自动编号（`w:numPr`）的段落会自动补上 `1. `、`2. ` 或 `- ` 前缀。
+- **异常文件提示**：对加密的 `.docx`、旧版二进制 `.doc`（OLE 复合文档）或损坏的压缩包，直接输出一行清晰的错误说明。
+
+### 4. 正文引用编号交叉检查（Citation Numbering Check）
+
+在对纯文本、Markdown 与 `.docx` 执行 `verify` 时，若文中同时存在编号参考文献列表与形如 `[1]`、`[3,4]`、`[5–7, 9]`（含全角 `［1，2］`）的正文数字引用，会自动执行编号核查：
+
+- **参考文献列表定位**：取全文最后一个 `References`、`Bibliography`、`Supplementary References`、`参考文献`、`引用文献` 等标题之后的第一段连续编号列表（允许最多缺 9 个号的跳号）；若无此类标题，则取全文最长的连续编号列表（因此前文的实验步骤或带编号的小节标题不会被误判为参考文献表）。对于 `[0, 1]` 区间或 `[2020]` 四位年份等非引用括号会自动忽略。
+- **检查项**（每发现一处问题报一条 `CHECK`）：
+  1. **引用了不存在的编号**（`missing-entry`）：如正文写了 `[15]` 但列表只有 14 条；
+  2. **从未被引用的条目**（`uncited`）：参考文献表中的某条在正文中从未出现；
+  3. **首次引用未按升序出现**（`out-of-order`）：如 `[3]` 比 `[2]` 更早在正文中首次出现；
+  4. **列表缺号或重号**（`gap` / `repeated`）：列表未从 `1` 开始、中间跳号或同一个序号用了两次；
+  5. **同一篇文献重复列出**（`duplicate`）：两条参考文献拥有相同的 DOI/PMID，或归一化后文本相似度 $\ge 0.95$（除非二者各自带有不同的 DOI）。
+- 当全部编号检查无误时，在末尾输出一条位置为 `numbering` 的 `OK` 汇总行（如 `OK\tnumbering\t-\t12 entries, 18 citations: numbering is clean`）。

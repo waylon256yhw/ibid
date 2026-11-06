@@ -1,0 +1,109 @@
+---
+title: Agent 契约与路线图
+description: 面向 AI Agent 的 --json 结构化输出与错误契约、本地文件存储模型，以及三阶段演进路线图。
+sidebar:
+  order: 6
+---
+
+`ibid` 从底层为 AI Agent 的工具调用闭环而设计，提供确定性的 JSON I/O 契约与完全透明的本地存储结构。
+
+## `--json` 结构化输出与错误契约
+
+除 `export` 外，所有命令均支持 `--json` 标志：
+
+1. **成功时**：`stdout` 仅输出合法的格式化 JSON，`stderr` 不输出任何内容（即使存在作者列表异常告警，也会内嵌在结果对象的 `warnings: string[]` 数组中），退出码为 `0`。
+2. **失败时**：
+   - **单结果命令**（如 `show`、`override`、`tag`、`untag`、`note`、`find`、`col create/show/rm/move/sort/merge/delete`）：在 `stdout` **恰好输出一个 JSON 错误对象**，`stderr` **不输出任何内容**，并以退出码 `1` 结束：
+     ```json
+     {
+       "error": {
+         "_tag": "UsageError",
+         "message": "..."
+       }
+     }
+     ```
+   - **批量命令**（`add`、`col add`、`rm`、`verify`）：即使部分或全部条目失败，也在 `stdout` 照常输出完整数组，数组中每个元素自带 `ok: false, error: { _tag, message, ... }`（或 `verify` 中的非 `OK` 状态），`stderr` 不输出任何内容，并以退出码 `1` 结束。
+   - **唯一例外**：命令行参数解析器在进入命令处理函数之前的语法错误（如缺少必填位置参数、未知的 `--flag`）仍按标准 CLI 文本输出帮助信息。
+
+### 标准错误标签（`_tag`）
+
+| `_tag` | 触发场景 |
+| :--- | :--- |
+| `InvalidIdentifierError` | 输入的字符串不是合法的 `doi:`、`pmid:`、`pmc:`、`arxiv:`、裸 `10.x` DOI 或 `https://doi.org/` 链接（在联网前即拦截）。 |
+| `IdentifierNotFoundError` | 权威注册库（返回 404 或空数组）或本地库中不存在该标识符。 |
+| `TitleMismatchError` | 传入 `--expect-title` 时，注册库实际标题与预期标题既不精确相等也不满足模糊/主副标题匹配（包含 `expected`、`actual`、`similarity` 字段）。 |
+| `UpstreamRateLimitError` | 权威源或 OpenAlex 返回 HTTP 429 限流 / 每日免费配额耗尽。 |
+| `UpstreamError` | 网络故障、超时（超过 20 秒）、非 200 状态码或返回了无法解析的 CSL-JSON。 |
+| `CollectionError` | 集合名称不合法、集合不存在/已存在、位置序号越界或引用了不在集合/本地库中的条目。 |
+| `ItemReferencedError` | 执行 `ibid rm <id>`（未加 `--force`）时，该条目仍被一个或多个集合引用（包含 `collections: string[]`）。 |
+| `StoreError` | 本地文件系统读写失败或 JSON 文件损坏。 |
+| `UsageError` | 命令参数组合不合法（如 `--expect-title` 数量与 ID 数量不一致、对 `manual` 条目执行 `override`、`verify` 输入文件无法读取等）。 |
+
+---
+
+## 本地存储结构（File-first Artifacts）
+
+本地库目录（`.ibid/` 或 `~/.local/share/ibid/`）采用纯文本 JSON 存储，方便 Git 版本控制与 Agent 直接检视：
+
+```text
+.ibid/
+├── items/                      # 单篇文献实体（按 <scheme>_<encodeURIComponent(id)>.json 命名）
+│   ├── doi_10.1038%2Fs41586-020-2649-2.json
+│   ├── pmid_29618526.json
+│   └── manual_7c12055e31.json
+├── collections/                # 按交付物（PPT / 论文 / 课题）聚合的有序文献清单
+│   ├── q4-deck.json
+│   └── review-manuscript.json
+└── styles/                     # 按需从 CSL 官方仓库下载缓存的 .csl 样式与 locales-*.xml
+```
+
+### 单篇文献结构（`RegistryItem`）
+
+```json
+{
+  "id": "doi:10.1038/s41586-020-2649-2",
+  "canonical": {
+    "type": "article-journal",
+    "title": "Array programming with NumPy",
+    "author": [{ "family": "Harris", "given": "Charles R." }],
+    "issued": { "date-parts": [[2020, 9, 16]] },
+    "container-title": "Nature",
+    "volume": "585",
+    "issue": "7825",
+    "page": "357-362",
+    "DOI": "10.1038/s41586-020-2649-2"
+  },
+  "verification": {
+    "source": "doi.org",
+    "url": "https://doi.org/10.1038/s41586-020-2649-2",
+    "fetchedAt": "2026-11-06T12:00:00.000Z",
+    "sha256": "...",
+    "titleMatch": "VERIFIED",
+    "expectedTitle": "Array programming with NumPy",
+    "similarity": 1
+  },
+  "overrides": {
+    "page": "357–362"
+  },
+  "evidences": [
+    {
+      "text": "提出 NumPy 通用数组接口协议",
+      "source": "阅读笔记",
+      "addedAt": "2026-11-06T12:05:00.000Z"
+    }
+  ],
+  "tags": ["array", "python"]
+}
+```
+
+---
+
+## 演进路线图（Roadmap）
+
+- **Stage 1：核心本体与手搓抓取落地（已完成）**
+  基于 `Effect 4` 手搓权威源 Resolver（`doi.org` 内容协商与 PubMed/PMC 引用导出接口），跑通单篇文献抓取、标题防伪核验与本地 `items/` 原子落盘闭环。
+- **Stage 2：文献列表快速编排与多样化导出（已完成）**
+  围绕具体交付物提供完整的有序集合管理（`col`）、本地字段更正（`override`）、无标识符手工条目（`--manual`）、OpenAlex 标题候选检索（`find`）、多格式与全量 CSL 仓库样式导出（`md`/`text`/`html`/`rtf`/`bibtex`/`csl-json`/`dossier`），以及支持 `.bib`、Markdown 与 Word（`.docx`）的元数据与引用编号核验（`verify`）。
+- **Stage 3：外部 Connector 与 MCP 生态拓展（远期规划）**
+  - **多源 Ingest 连接器**：对接 Consensus、Undermind 等深度文献检索应用，支持吞入（`ibid ingest`）外部调研报告（`.md`）与导出清单，将二手提炼结论自动挂载到 `LiteratureItem.evidences` 并后台并发拉取权威 `CSL-JSON` 完成核验锁死；
+  - **MCP 双向接入**：支持桥接远程文献检索 MCP，并提供开箱即用的本地 Agent Skill 与 MCP Server。

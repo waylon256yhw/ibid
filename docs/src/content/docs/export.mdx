@@ -1,0 +1,85 @@
+---
+title: 导出与引文样式
+description: 支持 7 种导出格式、内置与官方 CSL 样式按需下载缓存、以及 GB/T 7714 中英文混排处理。
+sidebar:
+  order: 4
+---
+
+`ibid export` 将指定集合（或不传集合名时的整个本地文献库）格式化输出到 `stdout`。省略集合名时，全库条目按第一作者、出版年份排序（手工条目排在末尾）。若集合中含有已不在本地库内的条目，命令会直接报错并指明具体位置与 ID。
+
+```bash
+ibid export q4-deck                          # 默认 --format md --style vancouver；按集合顺序编号
+ibid export q4-deck --style gb7714 --format text
+ibid export q4-deck --style ieee             # CSL 官方仓库中的任意样式名，首次使用时自动下载并缓存
+ibid export q4-deck --style ./my-journal.csl # 本地 .csl 文件路径
+ibid export q4-deck --style apa --keep-order # 非编号样式默认按样式自身排序；此选项强制保持集合顺序
+ibid export q4-deck --format rtf | pbcopy    # macOS：以富文本放入剪贴板，可直接粘贴进 Word / Pages / WPS
+ibid export q4-deck --format html > refs.html
+ibid export --format bibtex > refs.bib       # 不给集合名时导出整个本地库
+ibid export q4-deck --format dossier         # Markdown 证据速查表：序号 | 作者年份 | 标题 | 备注 | 链接
+```
+
+---
+
+## 支持的导出格式（`--format`）
+
+| 格式 | 说明 |
+| :--- | :--- |
+| `md`（默认） | 每行一条 Markdown 参考文献，保留样式中的斜体（`*...*`）与粗体（`**...**`），解码 HTML 实体。 |
+| `text` | 纯文本参考文献列表，每行一条。 |
+| `html` | 自包含的 HTML 片段（带 `<meta charset="utf-8">`），保留斜体、粗体、上标、下标；非编号样式采用悬挂缩进，编号样式的序号放在固定宽度容器中对齐。在浏览器打开后复制或直接粘贴进 Word / Google Docs 可保留全部排版。 |
+| `rtf` | 完整的 RTF 文档：保存为 `.rtf` 可直接用 Word 打开；在 macOS 上通过 `\| pbcopy` 即可作为富文本写入剪贴板（以 `{\rtf1` 开头的输入会被系统剪贴板识别为富文本）。中文字符、弯引号、破折号等均以 `\uN` 转义保留；每条带 0.5 英寸悬挂缩进，编号样式的序号后带制表符 `\tab`。 |
+| `bibtex` | 中文字符原样保留。引用键（citation key）为稳定、唯一的纯 ASCII（如 `harris2020array`）：若作者名不含拉丁字母则生成 `ref<年份><6 位哈希>`；该哈希仅取决于条目自身的 DOI（无则 PMID，再无则标题），因此**增删其他条目绝不会改变已有条目的引用键**；若两个拉丁键发生碰撞，相撞条目各自拼上自身哈希。arXiv 预印本（DOI 为 `10.48550/arxiv.*` 且无期刊）自动补充 `journal = {arXiv preprint arXiv:<id>}`。 |
+| `csl-json` | 输出应用本地更正后的标准 CSL-JSON 数组（每项带本地主键 `id`；手工条目带 `"custom": {"ibid-manual": true}`）。 |
+| `dossier` | Markdown 矩阵速查表，包含 `序号 \| 作者年份 \| 标题 \| 备注 \| 链接` 五列。备注列自动合并集合条目的 `section`、`context` 与条目自身的 `evidences` 笔记，方便做 PPT 或写综述时对照。 |
+
+<Aside type="tip" title="DOI 与 URL 去重">
+  当条目已有 `DOI` 时，`md`、`text`、`html`、`rtf` 导出会自动剥离注册库附带的跳转 `URL`，避免在 GB/T 7714 等样式下重复打印 DOI 与网址。
+</Aside>
+
+---
+
+## 引文样式解析（`--style`）
+
+`--style`（仅作用于 `md`、`text`、`html`、`rtf` 四种列表格式）按以下顺序解析：
+
+1. **内置样式（离线可用）**：
+   - `vancouver`（默认）
+   - `apa`
+   - `harvard`
+   - `nature`（随二进制内置）
+   - `gb7714`（GB/T 7714-2015 顺序编码制，随二进制内置）
+   - `gb7714-2025`（GB/T 7714-2025 顺序编码制，随二进制内置）
+2. **本地文件路径**：
+   任何以 `.csl` 结尾的路径（如 `./my-journal.csl`）。
+3. **CSL 官方样式仓库按需拉取与缓存**：
+   支持 [citation-style-language/styles](https://github.com/citation-style-language/styles) 仓库中的任意样式名（文件名去掉 `.csl`，如 `ieee`、`chicago-author-date`、`nature-communications`、`elsevier-harvard`）。
+   - 样式名仅允许小写字母、数字和连字符（`^[a-z0-9][a-z0-9-]*$`），不合法时在联网前即报错；
+   - 首次使用时先查找仓库顶层，再查找 `dependent/` 目录，下载后缓存到当前库目录下的 `styles/<name>.csl`，后续使用完全离线；
+   - 若为期刊的依附样式（dependent style），会自动解析其 `independent-parent` 链接获取父样式并用父样式渲染（父样式同样缓存）；
+   - 若样式所需的区域设置（`default-locale`）不在内置列表（`en-US`、`nl-NL`、`fr-FR`、`de-DE`、`es-ES` 及内置 `zh-CN`）中，会自动从 [citation-style-language/locales](https://github.com/citation-style-language/locales) 下载并缓存为 `styles/locales-<lang>.xml`；若拉取失败则在 `stderr` 提示一行并回退使用 `en-US`（内置样式不联网下载区域设置）。
+
+---
+
+## 排序规则与中英文混排
+
+### 样式排序 vs 集合顺序（`--keep-order`）
+
+导出顺序由 CSL 样式的 `<category citation-format="…"/>` 决定：
+
+- **编号样式（`numeric`）**：始终严格保持集合顺序，按位置编号为 `1.` / `[1]`、`2.` / `[2]`……；
+- **非编号样式（如 `author-date` 的 `apa`、`harvard`）**：默认按样式自身的排序规则排序，使同一作者同一年份的多篇文献按阅读顺序分配 `2020a`、`2020b`；传入 `--keep-order` 可强制保持集合顺序（此时年份字母后缀仍由样式内部分配，可能出现 `2020b` 在前）。
+
+### 中英文混排处理（“等” vs “et al.”）
+
+对于默认区域设置为中文的样式（如 `gb7714` 与 `gb7714-2025`）：
+
+- `language` 以 `zh` 开头或标题含汉字的条目使用中文区域设置（多作者缩写为“等”），其余条目使用 `en-US`（多作者缩写为“et al.”）；
+- 两组分别整批送入引文引擎渲染（因此同组内仍能正确区分 `2020a` / `2020b`）；
+- **编号样式**渲染后按原集合顺序合并，并按最终位置重新编号（`html` 与 `rtf` 同样重编号）；
+- **非编号样式**在按样式排序时，中文组排在前、外文组排在后，各组内部按样式排序（符合 GB/T 7714 著者-出版年制“按文种集中”规范）。
+- 其他非中文默认区域的样式整张列表统一使用其默认区域设置一次渲染，避免中文词汇（如 `2011年`、`页 1`）混入英文样式。
+
+<Aside type="note" title="已知上游样式行为">
+  上游 `gb7714-2025.csl` 样式文件本身对英文条目也使用了全角标点（如 `，`、`（7825）`），`ibid` 保持了上游样式原貌未做篡改。
+</Aside>

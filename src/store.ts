@@ -3,11 +3,11 @@ import { homedir } from "node:os"
 import { checkTitle, type Fetched, parseId, type Ref } from "./resolve.ts"
 import { type Csl, IdentifierNotFoundError, Item, type Note, StoreError } from "./schema.ts"
 
-/** `doi:<lower-cased doi>` whenever there is a DOI, else `pmid:<n>`. */
+/** `doi:<lower-cased doi>` whenever there is a DOI, else `pmid:<n>`, else `fallback`. */
 export const itemKey = (csl: Csl, fallback: string) =>
   csl.DOI ? `doi:${csl.DOI.toLowerCase()}` : csl.PMID ? `pmid:${csl.PMID}` : fallback
 
-export const keyOf = (ref: Ref) => ref.scheme === "doi" ? `doi:${ref.doi}` : `pmid:${ref.pmid}`
+export const keyOf = (ref: Ref) => ref.scheme === "doi" ? `doi:${ref.doi}` : ref.scheme === "pmid" ? `pmid:${ref.pmid}` : `pmc:${ref.pmc}`
 
 export const fileName = (key: string) => {
   const i = key.indexOf(":")
@@ -66,10 +66,13 @@ export const writeJsonAtomic = Effect.fn("writeJsonAtomic")(function*(dir: strin
 export const readJson = <S extends Schema.Codec<any, string>>(schema: S, what: string) => {
   const decode = Schema.decodeUnknownEffect(schema)
   return Effect.fn("readJson")(function*(path: string) {
-    const fs = yield* FileSystem.FileSystem
-    if (!(yield* fs.exists(path).pipe(Effect.mapError(fail(path, "cannot stat"))))) return Option.none<S["Type"]>()
-    const text = yield* fs.readFileString(path).pipe(Effect.mapError(fail(path, "cannot read")))
-    return Option.some((yield* decode(text).pipe(Effect.mapError(fail(path, `invalid ${what} file`)))) as S["Type"])
+    const text = yield* (yield* FileSystem.FileSystem).readFileString(path).pipe(
+      Effect.map(Option.some),
+      Effect.catchIf((e) => e.reason._tag === "NotFound", () => Effect.succeed(Option.none<string>())),
+      Effect.mapError(fail(path, "cannot read"))
+    )
+    if (Option.isNone(text)) return Option.none<S["Type"]>()
+    return Option.some((yield* decode(text.value).pipe(Effect.mapError(fail(path, `invalid ${what} file`)))) as S["Type"])
   })
 }
 
@@ -92,11 +95,19 @@ export const readItem = Effect.fn("readItem")(function*(key: string) {
   return yield* readItemFile((yield* Path.Path).join(yield* itemsDir, fileName(key)))
 })
 
+const READ_CONCURRENCY = 16
+
 export const listItems = Effect.fn("listItems")(function*() {
   const path = yield* Path.Path
   const dir = yield* itemsDir
-  const items = yield* Effect.forEach(yield* listJson(dir), (n) => readItemFile(path.join(dir, n)))
+  const items = yield* Effect.forEach(yield* listJson(dir), (n) => readItemFile(path.join(dir, n)), { concurrency: READ_CONCURRENCY })
   return items.flatMap(Option.toArray)
+})
+
+/** The stored items among `keys`, by key; missing ones are left out. */
+export const readItems = Effect.fn("readItems")(function*(keys: ReadonlyArray<string>) {
+  const found = yield* Effect.forEach(new Set(keys), readItem, { concurrency: READ_CONCURRENCY })
+  return new Map(found.flatMap(Option.toArray).map((i) => [i.id, i]))
 })
 
 /** Validates and writes an item; tags are sorted and de-duplicated on the way. */
@@ -124,8 +135,9 @@ export const findItem = Effect.fn("findItem")(function*(input: string) {
   const key = keyOf(ref)
   const direct = yield* readItem(key)
   if (Option.isSome(direct)) return direct.value
-  if (ref.scheme === "pmid") {
-    const hit = (yield* listItems()).find((i) => i.canonical.PMID === ref.pmid)
+  // Ceiling: a PMID or PMCID for a DOI-keyed item reads every item file. Fine at hundreds of items; needs an index beyond that.
+  if (ref.scheme !== "doi") {
+    const hit = (yield* listItems()).find((i) => ref.scheme === "pmid" ? i.canonical.PMID === ref.pmid : i.canonical.PMCID === `PMC${ref.pmc}`)
     if (hit) return hit
   }
   return yield* new IdentifierNotFoundError({ id: key, message: `${key}: not in local store` })

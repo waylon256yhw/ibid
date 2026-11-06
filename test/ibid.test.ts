@@ -1,7 +1,8 @@
 import { BunServices } from "@effect/platform-bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { Effect, Exit, Layer, Option, Schema } from "effect"
+import { Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/http"
+import { TestClock, TestConsole } from "effect/testing"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -12,9 +13,10 @@ import { checkTitle, cslType, type Fetched, fetchCsl, normalizeCsl, parseId, Raw
 import { addEntries, createCollection, deleteItem, mergeEntries, moveEntry, readCollection, removeEntries, sortEntries, writeCollection } from "../src/collections.ts"
 import { citationKeys, dossier, exportRows, isChinese, renderBibtex, renderList } from "../src/export.ts"
 import { findCandidates } from "../src/find.ts"
-import type { Collection, Csl, Item } from "../src/schema.ts"
-import { compareEntry, extractIds, verifyFile } from "../src/verify.ts"
-import { addNote, fileName, findItem, findStore, itemKey, keyFromFileName, matchesQuery, readItem, upsertItem, writeItem } from "../src/store.ts"
+import { type Collection, type Csl, IdentifierNotFoundError, type Item } from "../src/schema.ts"
+import { compareEntry, contextAt, extractIds, judgeEntry, sameJournal, textEvidence, verifyFile } from "../src/verify.ts"
+import { addNote, fileName, findItem, findStore, itemKey, keyFromFileName, matchesQuery, readItem, readItems, upsertItem, writeItem } from "../src/store.ts"
+import { checkTitles, handle, report } from "../src/ui.ts"
 
 const normalize = (raw: unknown) => normalizeCsl(Schema.decodeUnknownSync(RawCsl)(raw))
 const errorTag = <E extends { _tag: string }>(exit: Exit.Exit<unknown, E>) =>
@@ -29,9 +31,11 @@ describe("parseId", () => {
     expect(ok("pmid:29618526")).toEqual({ scheme: "pmid", pmid: "29618526" })
     expect(ok("arxiv:1706.03762v7")).toEqual({ scheme: "doi", doi: "10.48550/arxiv.1706.03762" })
     expect(ok("arXiv:hep-th/9901001")).toEqual({ scheme: "doi", doi: "10.48550/arxiv.hep-th/9901001" })
+    expect(ok("pmc:PMC5938574")).toEqual({ scheme: "pmc", pmc: "5938574" })
+    expect(ok("pmc:5938574")).toEqual({ scheme: "pmc", pmc: "5938574" })
   })
   test("rejects junk before any network call", () => {
-    for (const s of ["foo:bar", "pmid:12a", "doi:11.1/x", "arxiv:nope", "https://example.com/10.1/x", "Attention is all you need"]) {
+    for (const s of ["foo:bar", "pmid:12a", "pmc:PMCx", "doi:11.1/x", "arxiv:nope", "https://example.com/10.1/x", "Attention is all you need"]) {
       expect(errorTag(Effect.runSyncExit(parseId(s)))).toBe("InvalidIdentifierError")
     }
   })
@@ -132,6 +136,17 @@ describe("fetchCsl with a stubbed HttpClient", () => {
   })
   test("pubmed empty array is IdentifierNotFoundError", async () => {
     expect(errorTag(await run(200, [], "pmid:99999999999"))).toBe("IdentifierNotFoundError")
+  })
+  test("pmc: numeric id on the PMC endpoint, keyed by the record's DOI", async () => {
+    let url = ""
+    const layer = Layer.succeed(HttpClient.HttpClient)(HttpClient.make((request) => {
+      url = request.url
+      return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(JSON.stringify(pubmed))))
+    }))
+    const exit = await Effect.runPromiseExit(parseId("pmc:PMC5938574").pipe(Effect.flatMap(fetchCsl), Effect.provide(layer)))
+    expect(url).toBe("https://pmc.ncbi.nlm.nih.gov/api/ctxp/v1/pmc/?format=csl&id=5938574")
+    expect(Exit.isSuccess(exit) && itemKey(exit.value.canonical, "pmc:5938574")).toBe("doi:10.1098/rsif.2017.0387")
+    expect(Exit.isSuccess(exit) && exit.value.verification.source).toBe("pmc")
   })
 })
 
@@ -257,7 +272,13 @@ describe("library", () => {
     await ok(upsertItem(ids.deep, fetched(deep, "t1")))
     await ok(upsertItem(ids.attention, fetched(attention, "t1")))
     expect((await ok(findItem("pmid:29618526"))).id).toBe(ids.deep)
+    expect((await ok(findItem("pmc:PMC5938574"))).id).toBe(ids.deep)
     expect(errorTag(await run(findItem("pmid:42")))).toBe("IdentifierNotFoundError")
+  })
+
+  test("readItems reads only the given keys and skips missing ones", async () => {
+    const found = await ok(readItems([ids.numpy, "doi:10.1/absent", ids.numpy]))
+    expect([...found.keys()]).toEqual([ids.numpy])
   })
 
   test("ls query: every word, case-insensitive, across fields", async () => {
@@ -370,13 +391,61 @@ describe("export rendering", () => {
     expect(md).toBe("1. Vaswani, A. *et al.* Array programming with *NumPy* & friends. *Nature* **585**, 357–362 (2020).")
   })
 
-  test("BibTeX keeps Chinese text; keys are ASCII and unique", async () => {
-    expect(citationKeys([numpy, numpy, zh, zh])).toEqual(["harris2020array", "harris2020arrayb", "2011", "2011b"].map((k, i) => i < 2 ? k : `ref${k}`))
-    const bib = await renderBibtex([zh, numpy])
-    expect(bib).toContain("@article{ref2011,")
+  test("BibTeX keeps Chinese text; keys are ASCII, unique and do not depend on the rest of the list", async () => {
+    const zh2: Csl = { ...zh, title: "另一篇", DOI: "10.3969/x" }
+    const zhKey = citationKeys([zh])[0]!
+    expect(zhKey).toMatch(/^ref2011[0-9a-f]{6}$/)
+    const zh2Key = citationKeys([zh2])[0]!
+    expect(citationKeys([zh2, numpy, zh])).toEqual([zh2Key, "harris2020array", zhKey])
+    expect(zh2Key).not.toBe(zhKey)
+    // Colliding Latin keys all get the item's hash, whatever the order.
+    const other = { ...numpy, DOI: "10.1/other" }
+    const [a, b] = citationKeys([numpy, other]) as [string, string]
+    expect(a).toMatch(/^harris2020array[0-9a-f]{6}$/)
+    expect(citationKeys([other, numpy])).toEqual([b, a])
+    expect(new Set(citationKeys([numpy, numpy])).size).toBe(2)
+
+    const bib = await renderBibtex([zh, numpy, attention])
+    expect(bib).toContain(`@article{${zhKey},`)
     expect(bib).toContain("title = {采用网络编码的广播传输效率分析}")
     expect(bib).toContain("journal = {计算机工程}")
     expect(bib).toContain("@article{harris2020array,")
+    expect(bib).toContain("journal = {arXiv preprint arXiv:1706.03762}")
+  })
+
+  test("one batch per list: APA disambiguates the same author and year", async () => {
+    const second = { ...numpy, title: "Another paper", DOI: "10.1/other" }
+    const apa = await renderList([numpy, second], "apa", "text")
+    // citeproc letters them in bibliography (title) order; the list keeps ours.
+    expect(apa[0]).toStartWith("Harris, C. R., & Millman, K. J. (2020b). Array programming")
+    expect(apa[1]).toStartWith("Harris, C. R., & Millman, K. J. (2020a). Another paper")
+  })
+
+  test("GB/T: language groups merged back in order and renumbered", async () => {
+    const lines = await renderList([zh, attention, { ...zh, title: "另一篇" }, numpy], "gb7714", "text")
+    expect(lines.map((l) => l.slice(0, 4))).toEqual(["[1] ", "[2] ", "[3] ", "[4] "])
+    expect(lines[1]).toContain("VASWANI A, SHAZEER N, PARMAR N, et al.")
+    expect(lines[2]).toStartWith("[3] 崔巍, 王伟, 李四, 等. 另一篇")
+    expect(lines[3]).toContain("HARRIS")
+  })
+
+  test("article number becomes the page; editor, ISBN, place and series are kept", async () => {
+    const { page: _page, ...noPage } = crossref
+    const c = normalize({
+      ...noPage,
+      "article-number": "5416",
+      editor: [{ family: "Doe", given: "J" }],
+      ISBN: "978-0-00-000000-0",
+      "publisher-place": " London ",
+      "collection-title": ["Lecture Notes"]
+    })
+    expect(c).toMatchObject({ page: "5416", "article-number": "5416", editor: [{ family: "Doe", given: "J" }], ISBN: ["978-0-00-000000-0"], "collection-title": "Lecture Notes" })
+    // PubMed reports the journal's country as the place; it is kept only off journal articles.
+    expect(c["publisher-place"]).toBeUndefined()
+    expect(normalize({ ...crossref, type: "book-chapter", "publisher-place": " London " })["publisher-place"]).toBe("London")
+    expect(normalize({ ...crossref, "article-number": "e1" }).page).toBe("357-362")
+    const [line] = await renderList([c], "vancouver", "text")
+    expect(line).toContain("5416")
   })
 
   test("dossier escapes pipes and newlines and links by DOI, else PMID", () => {
@@ -406,10 +475,120 @@ describe("verify (pure)", () => {
     ].join("\n")
     expect(extractIds(text).map(({ id, line }) => [id, line])).toEqual([
       ["doi:10.1038/S41586-020-2649-2", 1],
-      ["doi:10.1002/(sici)1097-4636(199711)36:2", 2],
+      ["doi:10.1002/(sici)1097-4636(199711)36:2<123::aid>3.0.co;2-x", 2],
       ["pmid:29618526", 4],
       ["arxiv:1706.03762v2", 4]
     ])
+  })
+
+  test("identifiers in Markdown links, angle brackets and SICI DOIs", () => {
+    const ids = (s: string) => extractIds(s).map((f) => f.id)
+    // The link form `export --format dossier` prints.
+    expect(ids("[doi:10.1038/s41586-020-2649-2](https://doi.org/10.1038/s41586-020-2649-2)")).toEqual(["doi:10.1038/s41586-020-2649-2"])
+    expect(ids("[NumPy](https://doi.org/10.1038/s41586-020-2649-2), see <https://doi.org/10.1098/rsif.2017.0387>.")).toEqual([
+      "doi:10.1038/s41586-020-2649-2",
+      "doi:10.1098/rsif.2017.0387"
+    ])
+    expect(ids("doi:10.1002/(sici)1097-4636(199711)36:2<123::aid-jbm1>3.0.co;2-x.")).toEqual(["doi:10.1002/(sici)1097-4636(199711)36:2<123::aid-jbm1>3.0.co;2-x"])
+    expect(ids(`<a href="x">10.1234/abc</a>`)).toEqual(["doi:10.1234/abc"])
+    // A link's text and its target are read separately, so a target that differs is not hidden.
+    expect(ids("[doi:10.1038/s41586-020-2649-2](https://doi.org/10.1038/FAKE-DOI)")).toEqual(["doi:10.1038/s41586-020-2649-2", "doi:10.1038/FAKE-DOI"])
+    expect(ids("[1](https://doi.org/10.1000/a),[2](https://doi.org/10.1000/b)")).toEqual(["doi:10.1000/a", "doi:10.1000/b"])
+    // Full-width punctuation and Chinese text end a DOI; a full-width colon after PMID is accepted.
+    expect(ids("正如崔巍（2011年）（doi:10.3969/j.issn.1000-3428.2011.01.001）所述。PMID：29618526")).toEqual(["doi:10.3969/j.issn.1000-3428.2011.01.001", "pmid:29618526"])
+  })
+
+  const ching = normalize(pubmed) // Ching 2018
+  const harris = normalize(crossref) // Harris 2020
+  const attention = normalize(datacite) // Vaswani 2017
+
+  test("context is the list item in a list, else the paragraph", () => {
+    const text = [
+      "Intro line.",
+      "",
+      "1. Harris CR. Array programming with NumPy. Nature. 2020.",
+      "   doi:10.1098/rsif.2017.0387",
+      "2. Ching T. Opportunities and obstacles for deep learning in biology and medicine. 2018. doi:10.1038/s41586-020-2649-2",
+      "- [3] bullet",
+      "",
+      "Prose that",
+      "spans lines."
+    ].join("\n")
+    expect(contextAt(text, 4)).toBe("1. Harris CR. Array programming with NumPy. Nature. 2020.\n   doi:10.1098/rsif.2017.0387")
+    expect(contextAt(text, 5)).toStartWith("2. Ching T.")
+    expect(contextAt(text, 5)).not.toContain("bullet")
+    expect(contextAt(text, 9)).toBe("Prose that\nspans lines.")
+    const table = "| # | Title | Link |\n| --- | --- | --- |\n| 1 | A | doi:10.1000/a |\n| 2 | B | doi:10.1000/b |"
+    expect(contextAt(table, 3)).toBe("| 1 | A | doi:10.1000/a |")
+    // Swapped DOIs: each entry's registry record matches nothing in its own item.
+    expect(textEvidence(ching, contextAt(text, 4))).toBeUndefined()
+    expect(textEvidence(harris, contextAt(text, 5))).toBeUndefined()
+    expect(textEvidence(harris, contextAt(text, 3))).toBe("title found")
+    // Once per context: a DOI cited earlier is still judged inside the list item.
+    expect(extractIds(`See doi:10.1038/s41586-020-2649-2.\n\n${text}`).map((f) => [f.key, f.line])).toEqual([
+      ["doi:10.1038/s41586-020-2649-2", 1],
+      ["doi:10.1098/rsif.2017.0387", 6],
+      ["doi:10.1038/s41586-020-2649-2", 7]
+    ])
+  })
+
+  test("text evidence: fuzzy title, else first author and year", () => {
+    expect(textEvidence(ching, "Opportunities and obstacle for deep learning in biology and medicine (2018)")).toMatch(/^title found \(similarity 0\.9\d+\)$/)
+    expect(textEvidence(attention, "As Vaswani et al. (2017) (doi:10.48550/arXiv.1706.03762) showed")).toBe("first author Vaswani and year 2017 found")
+    expect(textEvidence(attention, "As Vaswani et al. (2019) showed")).toBeUndefined()
+
+    // Two works cited in one sentence: author and year only count next to their own identifier.
+    const evidence = (prose: string) => extractIds(prose).map((f) => textEvidence(f.key.includes("arxiv") ? attention : ching, f.near))
+    expect(evidence("Vaswani et al. 2017 (doi:10.48550/arXiv.1706.03762) and Ching et al. 2018 (doi:10.1098/rsif.2017.0387) agree."))
+      .toEqual(["first author Vaswani and year 2017 found", "first author Ching and year 2018 found"])
+    expect(evidence("Vaswani et al. 2017 (doi:10.1098/rsif.2017.0387) and Ching et al. 2018 (doi:10.48550/arXiv.1706.03762) agree."))
+      .toEqual([undefined, undefined])
+  })
+
+  test("several identifiers in one context: only the text before each one vouches for it", () => {
+    const evidence = (text: string) => extractIds(text).map((f) => textEvidence(f.key.includes("rsif") ? ching : harris, f.near))
+    const refs = (a: string, b: string) =>
+      `Harris, C. R. (2020). Array programming with NumPy. Nature. https://doi.org/${a}\nChing, T. (2018). Opportunities and obstacles for deep learning in biology and medicine. https://doi.org/${b}`
+    expect(evidence(refs("10.1038/s41586-020-2649-2", "10.1098/rsif.2017.0387"))).toEqual(["title found", "title found"])
+    // Unmarked reference lines form one paragraph; the other entry's title must not count.
+    expect(evidence(refs("10.1098/rsif.2017.0387", "10.1038/s41586-020-2649-2"))).toEqual([undefined, undefined])
+  })
+
+  test("Chinese text: names and titles match as substrings, and 年 after the year is fine", () => {
+    const zh: Csl = { type: "article-journal", title: "采用网络编码的广播传输效率分析", author: [{ literal: "崔巍" }], issued: { "date-parts": [[2011]] } }
+    expect(textEvidence(zh, "正如崔巍等（2011）所述")).toBe("first author 崔巍 and year 2011 found")
+    expect(textEvidence(zh, "崔巍等2011年的研究")).toBe("first author 崔巍 and year 2011 found")
+    expect(textEvidence(zh, "论文采用网络编码的广播传输效率分析指出")).toBe("title found")
+    expect(textEvidence(zh, "崔巍等（2012）所述")).toBeUndefined()
+  })
+
+  test("journal abbreviations", () => {
+    expect(sameJournal("J R Soc Interface", "Journal of the Royal Society Interface")).toBe(true)
+    expect(sameJournal("Nat. Commun.", "Nature Communications")).toBe(true)
+    expect(sameJournal("Phys Rev Lett", "Physical Review Letters")).toBe(true)
+    expect(sameJournal("Science", "Nature")).toBe(false)
+    expect(sameJournal("Nature", "Nature Communications")).toBe(false)
+    expect(sameJournal("PNAS", "Proceedings of the National Academy of Sciences")).toBe(true)
+    expect(sameJournal("NEJM", "New England Journal of Medicine")).toBe(true)
+    expect(sameJournal("Journal of the Royal Society Interface", "J R Soc Interface")).toBe(true)
+    expect(sameJournal("PNAS", "Physical Review Letters")).toBe(false)
+  })
+
+  test(".bib judgement: MISMATCH over CHECK over OK", () => {
+    const full = { title: "Array programming with NumPy", author: [{ family: "Harris" }], issued: { "date-parts": [[2020]] } }
+    expect(judgeEntry({ ...full, "container-title": "Nature" }, harris)).toEqual({ status: "OK", details: "Array programming with NumPy" })
+    expect(judgeEntry({ ...full, "container-title": "Science" }, harris)).toEqual({ status: "MISMATCH", details: "journal: \"Science\" vs registry \"Nature\"" })
+    expect(judgeEntry({ DOI: "10.1038/s41586-020-2649-2" }, harris)).toEqual({ status: "CHECK", details: "entry lacks title, author, year" })
+    const fake = { title: attention.title, author: [{ family: "Vaswani" }], issued: { "date-parts": [[2017]] }, "container-title": "Nature", volume: "585", page: "100--120" }
+    expect(judgeEntry(fake, attention)).toEqual({
+      status: "CHECK",
+      details: "journal: \"Nature\" not in the registry record; volume: \"585\" not in the registry record; page: \"100\" not in the registry record"
+    })
+    expect(judgeEntry({ ...fake, issued: { "date-parts": [[2016]] } }, attention).status).toBe("MISMATCH")
+    // The usual ways of writing a journal for an arXiv preprint are conventions, not claims.
+    const preprint = { title: attention.title, author: [{ family: "Vaswani" }], issued: { "date-parts": [[2017]] } }
+    expect(judgeEntry({ ...preprint, "container-title": "arXiv preprint arXiv:1706.03762" }, attention).status).toBe("OK")
+    expect(judgeEntry({ ...preprint, "container-title": "CoRR", volume: "abs/1706.03762" }, attention).status).toBe("OK")
   })
 
   const registry = normalize(crossref)
@@ -466,9 +645,11 @@ describe("find and verify with a stubbed HttpClient", () => {
     expect(found[0]?.openalex).toBe("W2")
   })
 
-  test("find: 429 mentions OPENALEX_API_KEY", async () => {
+  test("find: 429 mentions OPENALEX_API_KEY and is not retried", async () => {
+    const before = urls.length
     const exit = await run(Effect.provide(findCandidates("x y"), stub(429, { error: "Rate limit exceeded" })))
     expect(Exit.isFailure(exit) && Option.getOrUndefined(Exit.findErrorOption(exit))?.message).toContain("OPENALEX_API_KEY")
+    expect(urls.length - before).toBe(1)
   })
 
   test("verify reports NOT_FOUND for an identifier the registry does not know", async () => {
@@ -476,6 +657,57 @@ describe("find and verify with a stubbed HttpClient", () => {
     writeFileSync(md, "Claimed in doi:10.1038/missing.\n")
     const findings = await ok(Effect.provide(verifyFile(md), stub(404, "nope")))
     expect(findings).toEqual([{ status: "NOT_FOUND", location: "line 1", id: "doi:10.1038/missing", details: "doi:10.1038/missing: not found at doi.org" }])
+  })
+
+  test("verify: a DOI followed by the PMID of the same work shares the text before the DOI", async () => {
+    const md = join(dir, "refs.md")
+    writeFileSync(md, "Harris CR, et al. Array programming with NumPy. Nature. 2020. doi:10.1038/s41586-020-2649-2 PMID: 32939066\n")
+    const findings = await ok(Effect.provide(verifyFile(md), stub(200, crossref)))
+    expect(findings.map((f) => [f.id, f.status])).toEqual([["doi:10.1038/s41586-020-2649-2", "OK"], ["pmid:32939066", "OK"]])
+  })
+})
+
+describe("CLI contracts", () => {
+  const withConsole = <A, E>(e: Effect.Effect<A, E>) =>
+    Effect.runPromise(Effect.gen(function*() {
+      const exit = yield* Effect.exit(e)
+      return { exit, out: yield* TestConsole.logLines, err: yield* TestConsole.errorLines }
+    }).pipe(Effect.provide(TestConsole.layer)))
+  const notFound = new IdentifierNotFoundError({ id: "doi:10.1/x", message: "doi:10.1/x: not in local store" })
+
+  test("--json failure: one {error} value on stdout, nothing on stderr, a silent failure", async () => {
+    const r = await withConsole(handle(() => Effect.fail(notFound))({ json: true }))
+    expect(r.out.map((l) => JSON.parse(String(l)))).toEqual([{ error: { _tag: "IdentifierNotFoundError", id: "doi:10.1/x", message: "doi:10.1/x: not in local store" } }])
+    expect(r.err).toEqual([])
+    expect(errorTag(r.exit)).toBe("Reported")
+    // Without --json it stays a text error for Command.run to render.
+    expect(errorTag((await withConsole(handle(() => Effect.fail(notFound))({ json: false }))).exit)).toBe("UserError")
+  })
+
+  test("--json batch failure: only the array", async () => {
+    const results = [{ input: "foo:bar", ok: false as const, error: notFound }]
+    const r = await withConsole(handle(() => report(results, true, () => ""))({ json: true }))
+    expect(r.out.length).toBe(1)
+    expect(JSON.parse(String(r.out[0]))[0].error._tag).toBe("IdentifierNotFoundError")
+    expect(r.err).toEqual([])
+    expect(errorTag(r.exit)).toBe("Reported")
+  })
+
+  test("--expect-title: none, or once per id", () => {
+    expect(Effect.runSync(checkTitles(["a", "b"], []))).toBeUndefined()
+    expect(Effect.runSync(checkTitles(["a", "b"], ["A", "B"]))).toEqual(["A", "B"])
+    expect(errorTag(Effect.runSyncExit(checkTitles(["a", "b"], ["A"])))).toBe("UserError")
+  })
+
+  test("a registry that never answers times out as an UpstreamError", async () => {
+    const hang = Layer.succeed(HttpClient.HttpClient)(HttpClient.make(() => Effect.never))
+    const exit = await Effect.runPromise(Effect.gen(function*() {
+      const fiber = yield* parseId("doi:10.1234/slow").pipe(Effect.flatMap(fetchCsl), Effect.provide(hang), Effect.forkChild)
+      yield* TestClock.adjust("21 seconds")
+      return yield* Fiber.await(fiber)
+    }).pipe(Effect.provide(TestClock.layer())))
+    expect(errorTag(exit)).toBe("UpstreamError")
+    expect(Exit.isFailure(exit) && Option.getOrUndefined(Exit.findErrorOption(exit))?.message).toContain("no response within 20 s")
   })
 })
 

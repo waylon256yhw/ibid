@@ -56,7 +56,7 @@
    * 使用 `effect/Schema` 定义 `CslItemSchema`、`LiteratureItemSchema` 与标准错误类型（`IdentifierNotFoundError`、`TitleMismatchError`、`UpstreamRateLimitError`，以及 `InvalidIdentifierError`、`UpstreamError`、`StoreError`）。
 2. **手搓权威源 Resolver 层**
    * **DOI Resolver**：只对接 `https://doi.org/<DOI>` 内容协商（`Accept: application/vnd.citationstyles.csl+json`），一条路径即可拿到 Crossref、DataCite、ISTIC 注册 DOI 的 CSL-JSON；未知 DOI 返回 HTTP 404。不调用 Crossref REST API。
-   * **PubMed / PMID Resolver**：对接 PubMed 引用导出接口 `https://pmc.ncbi.nlm.nih.gov/api/ctxp/v1/pubmed/?format=csl&id=<PMID>`，直接返回含 `DOI`、`PMID`、`PMCID` 与正确 `type` 的 CSL-JSON（该接口仅接受 `Accept: */*`；不存在的 PMID 返回 HTTP 200 + 空数组 `[]`，映射为 `IdentifierNotFoundError`）。不调用 E-utilities。
+   * **PubMed / PMID Resolver**：对接 PubMed 引用导出接口 `https://pmc.ncbi.nlm.nih.gov/api/ctxp/v1/pubmed/?format=csl&id=<PMID>`，直接返回含 `DOI`、`PMID`、`PMCID` 与正确 `type` 的 CSL-JSON（该接口仅接受 `Accept: */*`；不存在的 PMID 返回 HTTP 200 + 空数组 `[]`，映射为 `IdentifierNotFoundError`）。不调用 E-utilities。`pmc:` 标识符走同一接口的 `/pmc/` 路径（只接受数字 id）。
    * **arXiv**：不单独对接，`arxiv:<id>` 映射为 DataCite DOI `10.48550/arXiv.<id>`（去掉 `vN` 版本后缀）后走 DOI Resolver。
    * **归一化**：注册库返回的并非干净 CSL——类型经映射表转换（如 `journal-article` → `article-journal`，未知类型回落为 `document`），DOI 一律小写，作者兼容 `{family, given}` / `{literal}` / `{name}`，日期兼容字符串；仅保存 Schema 声明的 CSL 字段，丢弃参考文献列表、许可证等。
    * **条目主键与文件名**：有 DOI 时主键为 `doi:<小写 DOI>`（即使是按 PMID 抓取的），否则为 `pmid:<n>`，避免同一篇文献落成两个文件；文件名为 `<scheme>_<encodeURIComponent(其余部分)>.json`，可无损还原主键。
@@ -77,12 +77,12 @@
    * **已实现的文献库管理（Stage 2 前半）**：库发现规则（`IBID_DIR` → 向上最近的 `.ibid/` → 全局 `${XDG_DATA_HOME:-~/.local/share}/ibid`）及 `init` / `where`；条目的 `ls` 多词检索与 `--tag` 过滤、`tag` / `untag`、`note`（追加到 `evidences`）、`rm`（被集合引用时需 `--force`）；集合 `create` / `ls` / `show` / `add` / `rm` / `move` / `sort` / `merge` / `delete`。集合名限定为 `^[a-z0-9][a-z0-9._-]*$`；CSL 增加可选 `language` 字段供中文引用格式使用。
    * **批量核验与反查（Audit / Verify）**：
      * `ibid verify <file.bib | file.md>`：扫描现有 `.bib` 或 Markdown 文稿中的 DOI/引用，与官方源及本地库交叉核对，揪出幻觉条目或字段缺失条目。
-     * 已实现：`.bib` 用 citation-js 解析，逐字段（标题、年份、第一作者姓氏、卷、期、起始页）比对，状态为 `OK` / `MISMATCH` / `NOT_FOUND` / `UNIDENTIFIED`；Markdown/文本只提取 DOI、`PMID:`、`arXiv:` 标识符，并检查注册库标题是否出现在所在段落（`OK` / `CHECK` / `NOT_FOUND`）；网络错误为 `ERROR`。不写入库。
+     * 已实现：`.bib` 用 citation-js 解析，逐字段（标题、年份、第一作者姓氏、期刊、卷、期、起始页）比对，状态为 `OK` / `CHECK`（声称了注册库没有的字段或缺少标题、作者、年份）/ `MISMATCH` / `NOT_FOUND` / `UNIDENTIFIED`；Markdown/文本只提取 DOI、`PMID:`、`arXiv:` 标识符，并检查所在列表项（不在列表中时为段落）是否含注册库标题（可模糊）或第一作者姓氏加年份（`OK` / `CHECK` / `NOT_FOUND`）；网络错误为 `ERROR`。不写入库。
    * **按标题查找候选（`find`）**：OpenAlex `title.search` 检索（无结果时回退到 `search`），按标题相似度排序，可用 `--author` 过滤；只给候选，不入库（Crossref 标题检索效果较差，不使用）。可选 `OPENALEX_API_KEY`。
 2. **多样化导出与格式化渲染（Rich Exports）**
    * `ibid export [<collection>] --format <fmt> --style <csl>`：
      * **Markdown / Plain-text 参考文献列表**：支持 Nature、APA、Vancouver、GB/T 7714 等常用格式，按清单顺序直接输出带编号 `[1]` 或 Author-Year 的文本，一键贴入 PPT 或文稿。
-       已实现样式：`apa`、`vancouver`（默认）、`harvard`、`nature`、`gb7714`、`gb7714-2025`，由 `@citation-js/core` 进程内渲染，后三者的 CSL 及 zh-CN 区域文件 vendored 于 `styles/`。为使中英文混排时英文条目用 “et al.”、中文条目用“等”，逐条按条目语言渲染后自行编号拼接。不使用 pandoc / hayagriva。
+       已实现样式：`apa`、`vancouver`（默认）、`harvard`、`nature`、`gb7714`、`gb7714-2025`，由 `@citation-js/core` 进程内渲染，后三者的 CSL 及 zh-CN 区域文件 vendored 于 `styles/`。为使中英文混排时英文条目用 “et al.”、中文条目用“等”，GB/T 样式按条目语言分两组各渲染一次，再按原顺序合并并自行编号；其他样式整张列表一次渲染。不使用 pandoc / hayagriva。
      * **标准格式导出**：导出干净、去重后的 `.bib` (BibTeX) 或 `CSL-JSON` 文件。
      * **证据速查表导出（Dossier / Matrix Table）**：导出包含“序号 | 作者年份 | 标题 | 核心结论/备注 | DOI 链接”的 Markdown 表格，方便做 PPT 或写综述时快速对照。
 3. **CLI 交互体验打磨**

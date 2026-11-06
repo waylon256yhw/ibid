@@ -11,14 +11,19 @@ export const Csl = Schema.Struct({
   type: Schema.String,
   title: Schema.String,
   author: Schema.optionalKey(Schema.Array(Author)),
+  editor: Schema.optionalKey(Schema.Array(Author)),
   issued: Schema.optionalKey(Schema.Struct({ "date-parts": Schema.Array(Schema.Array(Schema.Number)) })),
   "container-title": Schema.optionalKey(Schema.String),
   "container-title-short": Schema.optionalKey(Schema.String),
+  "collection-title": Schema.optionalKey(Schema.String),
   volume: Schema.optionalKey(Schema.String),
   issue: Schema.optionalKey(Schema.String),
   page: Schema.optionalKey(Schema.String),
+  "article-number": Schema.optionalKey(Schema.String),
   publisher: Schema.optionalKey(Schema.String),
+  "publisher-place": Schema.optionalKey(Schema.String),
   ISSN: Schema.optionalKey(Schema.Array(Schema.String)),
+  ISBN: Schema.optionalKey(Schema.Array(Schema.String)),
   DOI: Schema.optionalKey(Schema.String),
   PMID: Schema.optionalKey(Schema.String),
   PMCID: Schema.optionalKey(Schema.String),
@@ -30,7 +35,7 @@ export type Csl = typeof Csl.Type
 export const TitleMatch = Schema.Literals(["VERIFIED", "FUZZY_MATCH", "UNCHECKED"])
 
 export const Verification = Schema.Struct({
-  source: Schema.Literals(["doi.org", "pubmed"]),
+  source: Schema.Literals(["doi.org", "pubmed", "pmc"]),
   url: Schema.String,
   fetchedAt: Schema.String,
   sha256: Schema.String,

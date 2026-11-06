@@ -9,19 +9,17 @@ import { exportRows, FORMATS, render, STYLES, type Style } from "./export.ts"
 import { findCandidates } from "./find.ts"
 import { VERSION } from "./resolve.ts"
 import { addNote, authorName, fail, findItem, findStore, listItems, matchesQuery, writeItem } from "./store.ts"
-import { evidenceText, fetchAndStore, handle, json, line, printJson, report, tryEach, usage } from "./ui.ts"
+import { checkTitles, evidenceText, expectTitle, failWith, fetchAndStore, handle, json, line, printJson, report, tryEach, usage } from "./ui.ts"
 import { verifyFile } from "./verify.ts"
 
-const idArg = Argument.String("id").pipe(Argument.withDescription("doi:…, pmid:…, arxiv:…, 10.x DOI or https://doi.org/ URL"))
+const idArg = Argument.String("id").pipe(Argument.withDescription("doi:…, pmid:…, pmc:…, arxiv:…, 10.x DOI or https://doi.org/ URL"))
 
 const add = Command.make("add", {
   ids: idArg.pipe(Argument.atLeast(1)),
-  expectTitle: Flag.String("expect-title").pipe(Flag.withDescription("Fail unless the registry title matches"), Flag.optional),
+  expectTitle,
   json
 }, handle(Effect.fn(function*({ expectTitle, ids, json }) {
-  const expected = Option.getOrUndefined(expectTitle)
-  if (expected !== undefined && ids.length > 1) return yield* usage("--expect-title can only be used with a single id")
-  yield* report(yield* fetchAndStore(ids, expected), json, (r) => line(r.item))
+  yield* report(yield* fetchAndStore(ids, yield* checkTitles(ids, expectTitle)), json, (r) => line(r.item))
 }))).pipe(Command.withDescription("Fetch, verify and store items by identifier"))
 
 const show = Command.make("show", { id: idArg, json }, handle(Effect.fn(function*({ id, json }) {
@@ -139,9 +137,9 @@ const verify = Command.make("verify", {
   const findings = yield* verifyFile(file)
   if (json) yield* printJson(findings)
   else for (const f of findings) yield* Console.log([f.status, f.location, f.id ?? "-", f.details].join("\t"))
-  if (findings.length === 0) yield* Console.error("no citations found")
+  if (findings.length === 0 && !json) yield* Console.error("no citations found")
   const bad = findings.filter((f) => f.status !== "OK").length
-  if (bad > 0) return yield* usage(`${bad} of ${findings.length} finding(s) not OK`)
+  if (bad > 0) return yield* failWith(`${bad} of ${findings.length} finding(s) not OK`, json)
 }))).pipe(Command.withDescription("Audit a .bib or Markdown file against the store and the registries (writes nothing)"))
 
 Command.make("ibid").pipe(

@@ -43,8 +43,10 @@ ibid show pmid:29618526            # 也可用 doi:/arxiv: 或入库主键查看
 ibid add ... --json / ibid ls --json / ibid show <id> --json   # stdout 只输出 JSON
 ```
 
-* 支持的标识符：`doi:...`、`pmid:...`、`arxiv:...`、以 `10.` 开头的裸 DOI、`https://doi.org/...` 链接；其他输入在联网前即报错。
-* `--expect-title`（仅限单个 id）：归一化后完全一致为 `VERIFIED`，相似度 ≥ 0.9 为 `FUZZY_MATCH`，否则报 `TitleMismatchError` 且不写入；未提供时状态为 `UNCHECKED`。
+* 支持的标识符：`doi:...`、`pmid:...`、`pmc:PMC5938574`（或 `pmc:5938574`，经 PMC 引用导出接口抓取，记录含 DOI 时同样以 DOI 为主键）、`arxiv:...`、以 `10.` 开头的裸 DOI、`https://doi.org/...` 链接；其他输入在联网前即报错。
+* `--expect-title` 可重复：要么不给，要么按 id 顺序每个 id 给一次（如 `add A B --expect-title "标题A" --expect-title "标题B"`），个数不符为用法错误。归一化后完全一致为 `VERIFIED`，相似度 ≥ 0.9 为 `FUZZY_MATCH`，否则该 id 报 `TitleMismatchError` 且不写入；未提供时状态为 `UNCHECKED`。
+* 入库时保存注册库给出的 `article-number`；没有 `page` 时以文章编号作为 `page`，各样式都会输出。另保存（如有）`editor`、`ISBN`、`publisher-place`、`collection-title`。
+* 对注册库与 OpenAlex 的每次请求（含重试）限时 20 秒，超时报 `UpstreamError`。
 * 多个 id 时逐个处理，成功的照常写入；任一失败则退出码为 1。
 * 对已入库条目再次 `add` 会刷新权威元数据，但保留 `evidences` 与 PubMed 给出的 `PMID` / `PMCID`；未提供 `--expect-title` 时沿用上次的预期标题重新核验，不会把 `VERIFIED` 降级为 `UNCHECKED`。
 * 对已入库条目再次 `add` 同样保留 `tags`。
@@ -70,7 +72,7 @@ ibid note arxiv:1706.03762 "提出 Transformer" --source "我的阅读笔记"   
 ibid rm doi:10.1038/s41586-020-2649-2  # 被集合引用时拒绝并列出集合；--force 一并从这些集合移除
 ```
 
-* 所有接受条目标识符的命令与 `show` 一致：`doi:`/`pmid:`/`arxiv:`/裸 DOI/doi.org 链接，PMID 也能找到以 DOI 为主键的条目。
+* 所有接受条目标识符的命令与 `show` 一致：`doi:`/`pmid:`/`pmc:`/`arxiv:`/裸 DOI/doi.org 链接，PMID、PMCID 也能找到以 DOI 为主键的条目（此时扫描全库）。
 * `show` 额外显示 `language`、标签与每条 evidence 的文本。入库时若注册库提供 `language` 则一并保存。
 
 ### 集合（Collections）
@@ -90,7 +92,8 @@ ibid col merge q4-deck old-deck        # 把来源中目标没有的条目按序
 ibid col ls / ibid col delete old-deck
 ```
 
-* 所有命令支持 `--json`（stdout 只输出 JSON）；失败时输出一行错误信息并以退出码 1 结束。`col add`、`rm` 与 `add` 一样逐个报告每个 id 的结果。
+* `col add` 同样接受可重复的 `--expect-title`（规则同 `add`）；给出标题时，每个 id（包括已入库的）都重新抓取并核验。
+* 所有命令（`export` 除外）支持 `--json`（stdout 只输出 JSON）。不带 `--json` 时，失败输出一行错误信息到 stderr 并以退出码 1 结束。带 `--json` 时，失败的命令在 stdout 恰好输出一个 JSON 值、stderr 不输出任何内容、退出码为 1：单结果命令输出 `{"error": {"_tag": ..., "message": ..., ...}}`（用法错误的 `_tag` 为 `UsageError`）；批量命令 `add`、`col add`、`rm` 与 `verify` 照常输出数组，每项自带错误或状态。例外：命令行库在进入命令之前的参数解析错误（如缺少参数、未知选项）仍以文本形式输出帮助与错误。`col add`、`rm` 与 `add` 一样逐个报告每个 id 的结果。
 
 ### 导出、核验与按标题查找
 
@@ -104,14 +107,14 @@ ibid verify draft.bib [--json]
 ibid verify draft.md [--json]
 ```
 
-* `export` 只写 stdout。`--format`：`md`（一行一条，保留样式中的斜体/粗体为 Markdown）、`text`、`bibtex`（中文原样保留，引用键为稳定、唯一的 ASCII，如 `harris2020array`；作者无拉丁字母时为 `ref<年份>`）、`csl-json`（库中记录，带 `id`）、`dossier`（备注合并集合条目的 section、context 与条目笔记）。集合中有已不在库内的条目时报错并指出是哪一条。
-* `--style`：`apa`、`vancouver`（默认）、`harvard`、`nature`、`gb7714`（GB/T 7714-2015 顺序编码制）、`gb7714-2025`。逐条渲染：在两个 GB/T 样式中，`language` 以 `zh` 开头或标题含汉字的条目用 `zh-CN` 区域设置（多作者为“等”），其余用 `en-US`（“et al.”）；其他样式一律用 `en-US`。条目有 DOI 时，参考文献列表不再重复输出注册库给出的 URL。
+* `export` 只写 stdout。`--format`：`md`（一行一条，保留样式中的斜体/粗体为 Markdown）、`text`、`bibtex`（中文原样保留，引用键为稳定、唯一的 ASCII，如 `harris2020array`；作者无拉丁字母时为 `ref<年份><6 位哈希>`，哈希只取决于该条目的 DOI（无则 PMID，再无则标题），因此增删其他条目不会改变已有的键；两个拉丁键相同时，每个相撞的条目都加上自己的哈希；arXiv 条目（DOI 为 `10.48550/arxiv.*` 且无期刊）输出 `journal = {arXiv preprint arXiv:<id>}`）、`csl-json`（库中记录，带 `id`）、`dossier`（备注合并集合条目的 section、context 与条目笔记）。集合中有已不在库内的条目时报错并指出是哪一条。
+* `--style`：`apa`、`vancouver`（默认）、`harvard`、`nature`、`gb7714`（GB/T 7714-2015 顺序编码制）、`gb7714-2025`。整张列表一次渲染（保持集合顺序），因此 APA / Harvard 能为同一作者同一年份的文献加上 `2020a` / `2020b`；在两个 GB/T 样式中，`language` 以 `zh` 开头或标题含汉字的条目用 `zh-CN` 区域设置（多作者为“等”），其余用 `en-US`（“et al.”），两组各渲染一次后按原顺序合并、重新编号；其他样式一律用 `en-US`。条目有 DOI 时，参考文献列表不再重复输出注册库给出的 URL。
 * 已知上游行为：`gb7714-2025` 样式对英文条目也使用全角标点（如 `，`、`（7825）`），未做修改。
 * `find` 通过 OpenAlex 按标题检索候选文献（先用要求每个词都出现在标题中的 `title.search`，无结果时回退到更宽松的 `search`），按与查询标题的相似度排序，输出相似度、DOI、年份、第一作者、标题；`--author` 只保留作者姓氏匹配的候选。它不写入库，确认后用 `ibid add doi:... --expect-title "..."` 入库核验。
-* OpenAlex 无密钥时共享每日少量额度（约每 IP 100 次检索）；设置 `OPENALEX_API_KEY` 后以 `api_key` 发送。额度用尽或被限流（HTTP 429）时给出一行提示。
+* OpenAlex 无密钥时共享每日少量额度（约每 IP 100 次检索）；设置 `OPENALEX_API_KEY` 后以 `api_key` 发送。额度用尽或被限流（HTTP 429）时不重试，直接给出一行提示。
 * `verify` 不写入库；标识符已在库中则用库中记录，否则向注册库抓取；并发上限 3。结果每行：状态、位置（引用键或行号）、标识符、详情；任何一条不是 `OK` 时退出码为 1。
-  * `.bib`：有 DOI（或 PMID、arXiv 号）的条目与注册库比对标题（规则同 `--expect-title`）、年份、第一作者姓氏、卷、期、起始页：`OK` / `MISMATCH`（列出各字段的声称值与注册库值）/ `NOT_FOUND`；无标识符的条目按标题检索，报 `UNIDENTIFIED` 并给出相似度达 0.9 的最佳候选（检索失败时说明原因）。
-  * 其他文件（Markdown、纯文本）：提取 DOI、`PMID: 12345`、`arXiv:1706.03762`，每个标识符报告首次出现的行号；解析失败为 `NOT_FOUND`，注册库标题出现在所在段落中为 `OK`，否则为 `CHECK` 并给出注册库标题供人工对照。
+  * `.bib`：有 DOI（或 PMID、arXiv 号）的条目与注册库比对标题（规则同 `--expect-title`）、年份、第一作者姓氏、期刊或 booktitle、卷、期、起始页。期刊名与注册库的 `container-title` 或 `container-title-short` 归一化后相同、模糊相同（≥ 0.9），或去掉 of/the/and 等虚词后每个词都是注册库对应词的前缀（`J R Soc Interface`、`Nat. Commun.`、`Phys Rev Lett`）即视为一致；缩写在哪一方都可以，条目只写首字母缩写（`PNAS`、`NEJM`）也算一致。注册库记录是没有期刊的 arXiv 预印本时，`arXiv`、`arXiv preprint arXiv:<id>`（即 `export --format bibtex` 的写法）、`CoRR`（及卷号 `abs/<id>`）视为惯例写法，不算声称。状态按优先级：`MISMATCH`（有字段与注册库矛盾）> `CHECK`（条目声称了注册库记录中没有的字段，如 arXiv 记录没有的期刊、卷、页；或条目缺少标题、作者、年份）> `OK`；详情列出全部发现。另有 `NOT_FOUND`；无标识符的条目按标题检索，报 `UNIDENTIFIED` 并给出相似度达 0.9 的最佳候选（检索失败时说明原因）。
+  * 其他文件（Markdown、纯文本）：提取 DOI（含 Markdown 链接 `[doi:…](https://doi.org/…)`、尖括号链接与 SICI DOI）、`PMID: 12345`、`arXiv:1706.03762`。标识符的上下文：所在行属于列表（`-`、`*`、`1.`、`[1]` 等标记，含到下一个标记为止的续行）时为该列表项，表格行自成一个上下文，否则为空行分隔的段落；同一标识符在每个上下文中各判断一次，报告该上下文中首次出现的行号。解析失败为 `NOT_FOUND`；注册库标题（精确或相似度 ≥ 0.9）出现在上下文中为 `OK`，否则注册库第一作者姓氏与年份都出现时为 `OK`（详情说明依据）；都不满足为 `CHECK`，并给出注册库的标题、第一作者与年份供人工对照。同一上下文引用了多个标识符时，标题与作者年份都只在上一个标识符与本标识符之间的文字里查找（紧邻且指向同一文献的标识符，如 DOI 后跟 PMID，共用前面的文字），佐证文字因此须写在标识符之前；这样无论在列表、无标记的参考文献行、表格还是同一句话里互换两个 DOI，都会报 `CHECK`。Markdown 链接的文字与目标地址中的 DOI 分别提取，二者不一致时都会被核验。中文作者名与标题按子串匹配，`2011年` 式的年份、全角标点后的 DOI 也能识别。
   * 网络或上游错误报 `ERROR`。
 
 ---

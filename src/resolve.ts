@@ -1,5 +1,5 @@
-import { DateTime, Effect, Schedule, Schema } from "effect"
-import { HttpClient, HttpClientRequest } from "effect/http"
+import { Cause, DateTime, Effect, Schedule, Schema } from "effect"
+import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http"
 import pkg from "../package.json" with { type: "json" }
 import {
   Csl,
@@ -16,12 +16,15 @@ const USER_AGENT = `ibid/${VERSION} (+https://github.com/waylon256yhw/ibid)`
 
 // ---------- identifiers ----------
 
-export type Ref = { readonly scheme: "doi"; readonly doi: string } | { readonly scheme: "pmid"; readonly pmid: string }
+export type Ref =
+  | { readonly scheme: "doi"; readonly doi: string }
+  | { readonly scheme: "pmid"; readonly pmid: string }
+  | { readonly scheme: "pmc"; readonly pmc: string }
 
 const DOI = /^10\.\d{4,9}\/\S+$/
 const ARXIV = /^(\d{4}\.\d{4,5}|[a-z-]+(\.[a-z]{2})?\/\d{7})$/i
 
-/** Accepts doi:, pmid:, arxiv:, a bare 10.x DOI or a doi.org URL. DOIs come back lower-cased. */
+/** Accepts doi:, pmid:, pmc: (digits, `PMC` prefix optional), arxiv:, a bare 10.x DOI or a doi.org URL. DOIs come back lower-cased. */
 export const parseId = (raw: string): Effect.Effect<Ref, InvalidIdentifierError> => {
   const input = raw.trim()
   const invalid = (why: string) =>
@@ -34,6 +37,10 @@ export const parseId = (raw: string): Effect.Effect<Ref, InvalidIdentifierError>
       return doi(rest.trim())
     case "pmid":
       return /^\d+$/.test(rest.trim()) ? Effect.succeed({ scheme: "pmid", pmid: rest.trim() }) : invalid("PMID must be digits")
+    case "pmc": {
+      const n = /^(?:pmc)?(\d+)$/i.exec(rest.trim())?.[1]
+      return n ? Effect.succeed({ scheme: "pmc", pmc: n }) : invalid("expected pmc:PMC<digits> or pmc:<digits>")
+    }
     case "arxiv": {
       const id = rest.trim().replace(/v\d+$/i, "")
       return ARXIV.test(id) ? doi(`10.48550/arXiv.${id}`) : invalid("not an arXiv id")
@@ -44,34 +51,40 @@ export const parseId = (raw: string): Effect.Effect<Ref, InvalidIdentifierError>
       return m ? doi(decodeURIComponent(m[1]!)) : invalid("only https://doi.org/ URLs are accepted")
     }
   }
-  return input.startsWith("10.") ? doi(input) : invalid("expected doi:, pmid:, arxiv:, a bare 10.x DOI or a https://doi.org/ URL")
+  return input.startsWith("10.") ? doi(input) : invalid("expected doi:, pmid:, pmc:, arxiv:, a bare 10.x DOI or a https://doi.org/ URL")
 }
 
 // ---------- CSL normalization ----------
 
 const StrOrNum = Schema.Union([Schema.String, Schema.Number])
 const StrOrList = Schema.Union([Schema.String, Schema.Array(Schema.String)])
+const Names = Schema.Array(Schema.Struct({
+  family: Schema.optionalKey(Schema.String),
+  given: Schema.optionalKey(Schema.String),
+  literal: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String)
+}))
 
 // What the registries actually send. Unknown keys are dropped by decoding.
 export const RawCsl = Schema.Struct({
   type: Schema.optionalKey(Schema.String),
   title: StrOrList,
-  author: Schema.optionalKey(Schema.Array(Schema.Struct({
-    family: Schema.optionalKey(Schema.String),
-    given: Schema.optionalKey(Schema.String),
-    literal: Schema.optionalKey(Schema.String),
-    name: Schema.optionalKey(Schema.String)
-  }))),
+  author: Schema.optionalKey(Names),
+  editor: Schema.optionalKey(Names),
   issued: Schema.optionalKey(Schema.Struct({
     "date-parts": Schema.optionalKey(Schema.Array(Schema.Array(Schema.Union([Schema.Number, Schema.String, Schema.Null]))))
   })),
   "container-title": Schema.optionalKey(StrOrList),
   "container-title-short": Schema.optionalKey(StrOrList),
+  "collection-title": Schema.optionalKey(StrOrList),
   volume: Schema.optionalKey(StrOrNum),
   issue: Schema.optionalKey(StrOrNum),
   page: Schema.optionalKey(StrOrNum),
+  "article-number": Schema.optionalKey(StrOrNum),
   publisher: Schema.optionalKey(Schema.String),
+  "publisher-place": Schema.optionalKey(Schema.String),
   ISSN: Schema.optionalKey(StrOrList),
+  ISBN: Schema.optionalKey(StrOrList),
   DOI: Schema.optionalKey(Schema.String),
   PMID: Schema.optionalKey(StrOrNum),
   PMCID: Schema.optionalKey(StrOrNum),
@@ -121,28 +134,43 @@ const str = (v: string | number | undefined) => v === undefined ? undefined : St
 
 const decodeCsl = Schema.decodeUnknownSync(Csl)
 
-export const normalizeCsl = (raw: typeof RawCsl.Type): Csl => {
-  const author = raw.author?.map((a) =>
+const names = (ns: typeof Names.Type | undefined) => {
+  const out = ns?.map((a) =>
     a.family || a.given
       ? { ...(a.family && { family: a.family }), ...(a.given && { given: a.given }) }
       : { literal: a.literal ?? a.name ?? "" }
   ).filter((a) => !("literal" in a) || a.literal)
+  return out?.length ? out : undefined
+}
+const list = (v: string | ReadonlyArray<string> | undefined) => {
+  const out = v === undefined ? [] : typeof v === "string" ? [v] : v
+  return out.length ? out : undefined
+}
+
+export const normalizeCsl = (raw: typeof RawCsl.Type): Csl => {
   const dateParts = raw.issued?.["date-parts"]
     ?.map((parts) => parts.map(Number).filter((n) => Number.isFinite(n) && n > 0))
     .filter((parts) => parts.length > 0)
-  const issn = raw.ISSN === undefined ? undefined : typeof raw.ISSN === "string" ? [raw.ISSN] : raw.ISSN
+  const articleNumber = str(raw["article-number"])
   const fields = {
     type: cslType(raw.type),
     title: one(raw.title) ?? "",
-    author: author?.length ? author : undefined,
+    author: names(raw.author),
+    editor: names(raw.editor),
     issued: dateParts?.length ? { "date-parts": dateParts } : undefined,
     "container-title": one(raw["container-title"]),
     "container-title-short": one(raw["container-title-short"]),
+    "collection-title": one(raw["collection-title"]),
     volume: str(raw.volume),
     issue: str(raw.issue),
-    page: str(raw.page),
+    // Many journals have an article number and no pages; as `page` every style prints it.
+    page: str(raw.page) ?? articleNumber,
+    "article-number": articleNumber,
     publisher: raw.publisher,
-    ISSN: issn?.length ? issn : undefined,
+    // PubMed puts the journal's country here ("England"); a place only belongs on books and reports.
+    "publisher-place": cslType(raw.type) === "article-journal" ? undefined : raw["publisher-place"]?.trim() || undefined,
+    ISSN: list(raw.ISSN),
+    ISBN: list(raw.ISBN),
     DOI: raw.DOI?.trim().toLowerCase(),
     PMID: str(raw.PMID),
     PMCID: str(raw.PMCID),
@@ -206,28 +234,42 @@ export type Fetched = { canonical: Csl; verification: Omit<Verification, "titleM
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
 const decodeRaw = Schema.decodeUnknownEffect(RawCsl)
 
+/** Applied to the whole request, retries included, so a stalled publisher redirect cannot hang a command. */
+export const TIMEOUT_SECONDS = 20
+
+/** `HTTP <status>`, a timeout, or the transport error's own message. */
+export const httpFailure = (e: HttpClientError.HttpClientError) =>
+  e.reason._tag === "StatusCodeError"
+    ? { status: e.reason.response.status, message: `HTTP ${e.reason.response.status}` }
+    : { message: Cause.isTimeoutError(e.reason.cause) ? `no response within ${TIMEOUT_SECONDS} s` : e.message }
+
+const ctxp = (kind: string, id: string) => `https://pmc.ncbi.nlm.nih.gov/api/ctxp/v1/${kind}/?format=csl&id=${id}`
+
 export const fetchCsl = Effect.fn("fetchCsl")(function*(ref: Ref) {
   const [source, url, accept, label] = ref.scheme === "doi"
     ? ["doi.org", `https://doi.org/${ref.doi.split("/").map(encodeURIComponent).join("/")}`, "application/vnd.citationstyles.csl+json", `doi:${ref.doi}`] as const
-    : ["pubmed", `https://pmc.ncbi.nlm.nih.gov/api/ctxp/v1/pubmed/?format=csl&id=${ref.pmid}`, "*/*", `pmid:${ref.pmid}`] as const
+    : ref.scheme === "pmid"
+    ? ["pubmed", ctxp("pubmed", ref.pmid), "*/*", `pmid:${ref.pmid}`] as const
+    : ["pmc", ctxp("pmc", ref.pmc), "*/*", `pmc:PMC${ref.pmc}`] as const
   const upstream = (message: string) => new UpstreamError({ url, message: `${label}: ${message}` })
 
   const client = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest(HttpClientRequest.setHeaders({ Accept: accept, "User-Agent": USER_AGENT })),
     HttpClient.filterStatusOk,
-    HttpClient.retryTransient({ schedule: Schedule.exponential(200), times: 2 })
+    HttpClient.retryTransient({ schedule: Schedule.exponential(200), times: 2 }),
+    HttpClient.timeout(`${TIMEOUT_SECONDS} seconds`)
   )
   const body = yield* client.get(url).pipe(
     Effect.flatMap((res) => res.text),
     Effect.mapError((e) => {
-      const status = e.reason._tag === "StatusCodeError" ? e.reason.response.status : undefined
+      const { message, status } = httpFailure(e)
       if (status === 404) return new IdentifierNotFoundError({ id: label, message: `${label}: not found at ${source}` })
       if (status === 429) return new UpstreamRateLimitError({ url, message: `${label}: rate limited by ${source} (HTTP 429)` })
-      return upstream(status ? `HTTP ${status} from ${source}` : e.message)
+      return upstream(status ? `${message} from ${source}` : `${source}: ${message}`)
     })
   )
   const json = yield* decodeJson(body).pipe(Effect.mapError(() => upstream(`${source} returned non-JSON`)))
-  // The PubMed exporter 406s on any Accept but */*, and answers an unknown PMID with HTTP 200 and an empty array.
+  // The PubMed/PMC exporter 406s on any Accept but */*, and answers an unknown PMID with HTTP 200 and an empty array.
   if (Array.isArray(json) && json.length === 0) {
     return yield* new IdentifierNotFoundError({ id: label, message: `${label}: not found at ${source}` })
   }

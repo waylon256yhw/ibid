@@ -1,6 +1,6 @@
 import { Effect, Schedule, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
-import { normalizeTitle, similarity, VERSION } from "./resolve.ts"
+import { httpFailure, normalizeTitle, similarity, TIMEOUT_SECONDS, VERSION } from "./resolve.ts"
 import { UpstreamError, UpstreamRateLimitError } from "./schema.ts"
 
 const NullOr = <S extends Schema.Top>(s: S) => Schema.optionalKey(Schema.NullOr(s))
@@ -67,7 +67,13 @@ export const searchWorks = Effect.fn("searchWorks")(function*(title: string, row
   const client = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest(HttpClientRequest.setHeaders({ Accept: "application/json", "User-Agent": `ibid/${VERSION}` })),
     HttpClient.filterStatusOk,
-    HttpClient.retryTransient({ schedule: Schedule.exponential(200), times: 2 })
+    // Not on 429: an exhausted daily budget does not come back in a few hundred ms.
+    HttpClient.retry({
+      while: (e) => HttpClient.isTransientError(e) && httpFailure(e).status !== 429,
+      schedule: Schedule.exponential(200),
+      times: 2
+    }),
+    HttpClient.timeout(`${TIMEOUT_SECONDS} seconds`)
   )
   const run = (how: { filter: string } | { search: string }) => client.get(URL, {
     urlParams: {
@@ -80,14 +86,14 @@ export const searchWorks = Effect.fn("searchWorks")(function*(title: string, row
     Effect.flatMap(HttpClientResponse.schemaBodyJson(Works)),
     Effect.map((res) => res.results),
     Effect.mapError((e) => {
-      const status = e._tag === "HttpClientError" && e.reason._tag === "StatusCodeError" ? e.reason.response.status : undefined
+      const { message, status } = e._tag === "HttpClientError" ? httpFailure(e) : { message: e.message, status: undefined }
       if (status === 429) {
         return new UpstreamRateLimitError({
           url: URL,
           message: `OpenAlex rate limit or daily budget exhausted (HTTP 429); ${key ? "your OPENALEX_API_KEY budget is used up" : "set OPENALEX_API_KEY for your own budget"}`
         })
       }
-      return new UpstreamError({ url: URL, message: `OpenAlex search failed: ${status ? `HTTP ${status}` : e.message}` })
+      return new UpstreamError({ url: URL, message: `OpenAlex search failed: ${message}` })
     })
   )
   // The title filter needs every query word in the title, so a slightly wrong title finds

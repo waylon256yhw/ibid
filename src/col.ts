@@ -13,15 +13,15 @@ import {
   writeCollection
 } from "./collections.ts"
 import type { Collection } from "./schema.ts"
-import { listItems } from "./store.ts"
-import { findOrFetch, handle, json, line, printJson, report } from "./ui.ts"
+import { readItems } from "./store.ts"
+import { checkTitles, expectTitle, findOrFetch, handle, json, line, printJson, report } from "./ui.ts"
 
 const name = Argument.String("name").pipe(Argument.withDescription("Collection name, ^[a-z0-9][a-z0-9._-]*$"))
 const ref = Argument.String("ref").pipe(Argument.withDescription("1-based position or item identifier"))
 
 /** Numbered entries joined with the stored items; `[n]` is the citation number. */
 const printCollection = Effect.fn("printCollection")(function*(col: Collection, asJson: boolean) {
-  const items = new Map((yield* listItems()).map((i) => [i.id, i]))
+  const items = yield* readItems(col.entries.map((e) => e.itemId))
   const entries = col.entries.map((e, i) => ({ position: i + 1, ...e, item: items.get(e.itemId) ?? null }))
   if (asJson) return yield* printJson({ ...col, entries })
   yield* Console.log(`# ${col.name}${col.title ? `\t${col.title}` : ""}`)
@@ -57,10 +57,11 @@ const add = Command.make("add", {
   context: Flag.String("context").pipe(Flag.withDescription("Where it is cited, e.g. \"Slide 3\""), Flag.optional),
   section: Flag.String("section").pipe(Flag.withDescription("Section of the deliverable"), Flag.optional),
   at: Flag.Int("at").pipe(Flag.withDescription("Insert new entries at this 1-based position"), Flag.optional),
+  expectTitle,
   json
-}, handle(Effect.fn(function*({ at, context, ids, json, name, section }) {
+}, handle(Effect.fn(function*({ at, context, expectTitle, ids, json, name, section }) {
   const before = yield* readCollection(name)
-  const results = yield* findOrFetch(ids)
+  const results = yield* findOrFetch(ids, yield* checkTitles(ids, expectTitle))
   const found = results.flatMap((r) => r.ok ? [r.item.id] : [])
   const { actions, col } = yield* addEntries(before, found, {
     context: Option.getOrUndefined(context),
@@ -95,8 +96,9 @@ const sort = Command.make("sort", {
   desc: Flag.Boolean("desc").pipe(Flag.withDescription("Descending"), Flag.withDefault(false)),
   json
 }, handle(Effect.fn(function*({ by, desc, json, name }) {
-  const items = new Map((yield* listItems()).map((i) => [i.id, i]))
-  yield* printCollection(yield* writeCollection(sortEntries(yield* readCollection(name), items, by, desc)), json)
+  const before = yield* readCollection(name)
+  const items = yield* readItems(before.entries.map((e) => e.itemId))
+  yield* printCollection(yield* writeCollection(sortEntries(before, items, by, desc)), json)
 }))).pipe(Command.withDescription("Reorder entries by year, first author or title"))
 
 const merge = Command.make("merge", {

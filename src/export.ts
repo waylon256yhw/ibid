@@ -6,7 +6,7 @@ import zhLocale from "../styles/locales-zh-CN.xml" with { type: "text" }
 import { readCollection } from "./collections.ts"
 import { normalizeTitle } from "./resolve.ts"
 import { type Csl, CollectionError, type Item } from "./schema.ts"
-import { authorName, listItems, plain, year } from "./store.ts"
+import { authorName, listItems, plain, readItems, year } from "./store.ts"
 import { evidenceText } from "./ui.ts"
 
 // ---------- citation-js, loaded on first use (it adds ~20 ms to every start otherwise) ----------
@@ -71,12 +71,13 @@ export const htmlToMd = (html: string) =>
       .replace(/<[^>]*>/g, "")
   ).replace(/\s+/g, " ").trim()
 
-/** A numeric style rendered one entry at a time always says `1`; put the real number back. */
-export const renumber = (s: string, n: number) => s.replace(/^(\[?)1([.\]])/, `$1${n}$2`)
+/** A numeric style numbers each rendered batch from 1; put the entry's position in the full list instead. */
+export const renumber = (s: string, n: number) => s.replace(/^(\[?)\d+([.\]])/, `$1${n}$2`)
 
 /**
- * One line per entry, in the given order. Each entry is rendered on its own so it gets its own
- * locale: rendered together, GB/T 7714 gives English entries `等` instead of `et al.`.
+ * One line per entry, in the given order. Each locale group is rendered in one batch, so citeproc
+ * sees the whole group (APA/Harvard `2020a`/`2020b`). The GB/T styles render Chinese and other
+ * entries as separate batches: rendered together, English entries get `等` instead of `et al.`.
  */
 export const renderList = async (csls: ReadonlyArray<Csl>, style: Style, format: "md" | "text") => {
   const { Cite } = await citeLib()
@@ -84,41 +85,74 @@ export const renderList = async (csls: ReadonlyArray<Csl>, style: Style, format:
   // Only the GB/T styles are bilingual. In an English style the zh-CN locale would leak
   // Chinese terms into the entry (`2011年`, `页 1. 载于:`).
   const bilingual = template.startsWith("gb7714")
-  return csls.map((c, i) => {
-    // With a DOI, the registry's URL is just the resolver or a landing page, and GB/T prints both.
-    const { URL: _url, ...noUrl } = c
-    const out = new Cite([citeData(c.DOI ? noUrl : c, `r${i}`)]).format("bibliography", {
+  const lang = (c: Csl) => bilingual && isChinese(c) ? "zh-CN" : "en-US"
+  const lines = new Map<string, string>()
+  for (const group of new Set(csls.map(lang))) {
+    const data = csls.flatMap((c, i) => {
+      if (lang(c) !== group) return []
+      // With a DOI, the registry's URL is just the resolver or a landing page, and GB/T prints both.
+      const { URL: _url, ...noUrl } = c
+      return [citeData(c.DOI ? noUrl : c, `r${i}`)]
+    })
+    const out = new Cite(data).format("bibliography", {
       format: format === "md" ? "html" : "text",
       template,
-      lang: bilingual && isChinese(c) ? "zh-CN" : "en-US",
-      nosort: true
-    }) as string
-    const line = format === "md" ? htmlToMd(out) : out.replace(/\s+/g, " ").trim()
+      lang: group,
+      nosort: true,
+      asEntryArray: true
+    }) as unknown as Array<[string, string]>
+    for (const [id, entry] of out) lines.set(id, format === "md" ? htmlToMd(entry) : entry.replace(/\s+/g, " ").trim())
+  }
+  return csls.map((_, i) => {
+    const line = lines.get(`r${i}`) ?? ""
     return numeric ? renumber(line, i + 1) : line
   })
 }
 
 const ascii = (s: string) => s.normalize("NFKD").replace(/[^A-Za-z0-9]/g, "")
 
-/** `<family><year><first title word>` in ASCII (`ref` when the name has no Latin letters), made unique with b, c, … */
+/** Six hex digits that depend only on the item: its DOI, else PMID, else title. */
+export const shortHash = (c: Csl) =>
+  new Bun.CryptoHasher("sha256").update(c.DOI?.toLowerCase() ?? (c.PMID ? `pmid:${c.PMID}` : plain(c.title))).digest("hex").slice(0, 6)
+
+/**
+ * `<family><year><first title word>` in ASCII. When the name has no Latin letters, or two entries
+ * would share a key, `ref<year>` / that key plus `shortHash`, so a key never depends on what else
+ * is exported.
+ */
 export const citationKeys = (csls: ReadonlyArray<Csl>) => {
-  const used = new Set<string>()
-  return csls.map((c) => {
+  const bases = csls.map((c) => {
     const a = c.author?.[0]
-    const name = ascii(a ? a.family ?? a.literal ?? a.given ?? "" : "").toLowerCase() || "ref"
+    const name = ascii(a ? a.family ?? a.literal ?? a.given ?? "" : "").toLowerCase()
     const word = normalizeTitle(plain(c.title)).split(" ").map(ascii).find((w) => w.length > 3)?.toLowerCase() ?? ""
-    const base = `${name}${year(c) ?? ""}${word}`
-    let key = base
-    for (let i = 1; used.has(key); i++) key = `${base}${"bcdefghijklmnopqrstuvwxyz"[i - 1] ?? i}`
+    return name ? `${name}${year(c) ?? ""}${word}` : `ref${year(c) ?? ""}${shortHash(c)}`
+  })
+  const count = new Map<string, number>()
+  for (const b of bases) count.set(b, (count.get(b) ?? 0) + 1)
+  const used = new Set<string>()
+  return bases.map((base, i) => {
+    const first = count.get(base)! > 1 && !base.endsWith(shortHash(csls[i]!)) ? `${base}${shortHash(csls[i]!)}` : base
+    // Still taken only when the same item is listed twice.
+    let key = first
+    for (let n = 2; used.has(key); n++) key = `${first}_${n}`
     used.add(key)
     return key
   })
 }
 
+/** arXiv's DataCite records have no container; BibTeX wants a journal for `@article`. */
+const arxivJournal = (c: Csl) => {
+  const id = arxivId(c)
+  return id && !c["container-title"] ? { "container-title": `arXiv preprint arXiv:${id}` } : {}
+}
+
+/** The arXiv id of a record registered under arXiv's DataCite prefix. */
+export const arxivId = (c: Csl) => /^10\.48550\/arxiv\.(.+)$/i.exec(c.DOI ?? "")?.[1]
+
 export const renderBibtex = async (csls: ReadonlyArray<Csl>) => {
   const { Cite } = await citeLib()
   const keys = citationKeys(csls)
-  return (new Cite(csls.map((c, i) => ({ ...citeData(c, keys[i]!), "citation-key": keys[i] }))).format("bibtex") as string).trim()
+  return (new Cite(csls.map((c, i) => ({ ...citeData(c, keys[i]!), ...arxivJournal(c), "citation-key": keys[i] }))).format("bibtex") as string).trim()
 }
 
 // ---------- dossier ----------
@@ -151,15 +185,14 @@ export const dossier = (rows: ReadonlyArray<Row>) => {
 
 /** A collection's entries in order (a missing item is an error), else every item by first author, then year. */
 export const exportRows = Effect.fn("exportRows")(function*(name: string | undefined) {
-  const items = yield* listItems()
   if (name === undefined) {
     const key = (i: Item) => (i.canonical.author?.[0] ? authorName(i.canonical.author[0]) : "").toLowerCase()
-    return [...items]
+    return [...yield* listItems()]
       .sort((a, b) => key(a).localeCompare(key(b)) || (year(a.canonical) ?? 0) - (year(b.canonical) ?? 0))
       .map((item): Row => ({ item }))
   }
   const col = yield* readCollection(name)
-  const byId = new Map(items.map((i) => [i.id, i]))
+  const byId = yield* readItems(col.entries.map((e) => e.itemId))
   return yield* Effect.forEach(col.entries, (e, i) => {
     const item = byId.get(e.itemId)
     return item

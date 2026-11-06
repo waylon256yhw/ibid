@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 // Stored CSL-JSON: only the fields ibid keeps. Everything else the registry sends is dropped.
 export const Author = Schema.Struct({
@@ -22,7 +22,8 @@ export const Csl = Schema.Struct({
   DOI: Schema.optionalKey(Schema.String),
   PMID: Schema.optionalKey(Schema.String),
   PMCID: Schema.optionalKey(Schema.String),
-  URL: Schema.optionalKey(Schema.String)
+  URL: Schema.optionalKey(Schema.String),
+  language: Schema.optionalKey(Schema.String)
 })
 export type Csl = typeof Csl.Type
 
@@ -43,10 +44,27 @@ export const Item = Schema.Struct({
   id: Schema.String,
   canonical: Csl,
   verification: Verification,
-  // Stage 1 never writes evidences; entries are opaque and kept verbatim.
-  evidences: Schema.Array(Schema.Unknown)
+  // Entries are opaque and kept verbatim; `note` appends `Note`s.
+  evidences: Schema.Array(Schema.Unknown),
+  // Sorted and unique. Stage 1 files have no `tags` key.
+  tags: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([])))
 })
 export type Item = typeof Item.Type
+
+export type Note = { text: string; source?: string; addedAt: string }
+
+export const Collection = Schema.Struct({
+  name: Schema.String,
+  title: Schema.optionalKey(Schema.String),
+  createdAt: Schema.String,
+  entries: Schema.Array(Schema.Struct({
+    itemId: Schema.String,
+    context: Schema.optionalKey(Schema.String),
+    section: Schema.optionalKey(Schema.String)
+  }))
+})
+export type Collection = typeof Collection.Type
+export type Entry = Collection["entries"][number]
 
 // Every error carries a one-line `message` for humans and the --json error object.
 export class InvalidIdentifierError extends Schema.TaggedError<InvalidIdentifierError>()("InvalidIdentifierError", {
@@ -81,6 +99,18 @@ export class StoreError extends Schema.TaggedError<StoreError>()("StoreError", {
   message: Schema.String
 }) {}
 
+/** Missing, already existing or invalid collection, or a bad position/ref within one. */
+export class CollectionError extends Schema.TaggedError<CollectionError>()("CollectionError", {
+  name: Schema.String,
+  message: Schema.String
+}) {}
+
+export class ItemReferencedError extends Schema.TaggedError<ItemReferencedError>()("ItemReferencedError", {
+  id: Schema.String,
+  collections: Schema.Array(Schema.String),
+  message: Schema.String
+}) {}
+
 export type IbidError =
   | InvalidIdentifierError
   | IdentifierNotFoundError
@@ -88,3 +118,5 @@ export type IbidError =
   | UpstreamRateLimitError
   | UpstreamError
   | StoreError
+  | CollectionError
+  | ItemReferencedError

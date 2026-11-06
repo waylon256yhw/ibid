@@ -12,6 +12,9 @@
     "build": "bun build --compile src/cli.ts --outfile dist/ibid"
   },
   "dependencies": {
+    "@citation-js/core": "0.9.0",
+    "@citation-js/plugin-bibtex": "0.9.0",
+    "@citation-js/plugin-csl": "0.9.0",
     "@effect/platform-bun": "4.1.2",
     "effect": "4.1.2"
   },

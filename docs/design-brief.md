@@ -73,12 +73,16 @@
 
 1. **交付物集合与列表管理（Collections & List Manipulation）**
    * `ibid col create <name>` / `ibid col add <name> <id...> [--context "Slide 3"]`：将文献归集到指定 PPT 或文章清单中。
-   * **顺序与结构操作**：支持在 CLI 中对列表进行移动重排（`move` / `reorder`）、去重合并（`dedupe`）、按年份/作者排序或保持手动插入顺序。
+   * **顺序与结构操作**：`col move` 移动重排、`col sort --by year|author|title` 排序（默认保持手动插入顺序）、`col merge` 合并其他集合中缺少的条目。去重不设单独命令：`col add` 与 `col merge` 从不产生重复条目，对已在集合中的条目 `col add --context/--section` 只更新其上下文。
+   * **已实现的文献库管理（Stage 2 前半）**：库发现规则（`IBID_DIR` → 向上最近的 `.ibid/` → 全局 `${XDG_DATA_HOME:-~/.local/share}/ibid`）及 `init` / `where`；条目的 `ls` 多词检索与 `--tag` 过滤、`tag` / `untag`、`note`（追加到 `evidences`）、`rm`（被集合引用时需 `--force`）；集合 `create` / `ls` / `show` / `add` / `rm` / `move` / `sort` / `merge` / `delete`。集合名限定为 `^[a-z0-9][a-z0-9._-]*$`；CSL 增加可选 `language` 字段供中文引用格式使用。
    * **批量核验与反查（Audit / Verify）**：
      * `ibid verify <file.bib | file.md>`：扫描现有 `.bib` 或 Markdown 文稿中的 DOI/引用，与官方源及本地库交叉核对，揪出幻觉条目或字段缺失条目。
+     * 已实现：`.bib` 用 citation-js 解析，逐字段（标题、年份、第一作者姓氏、卷、期、起始页）比对，状态为 `OK` / `MISMATCH` / `NOT_FOUND` / `UNIDENTIFIED`；Markdown/文本只提取 DOI、`PMID:`、`arXiv:` 标识符，并检查注册库标题是否出现在所在段落（`OK` / `CHECK` / `NOT_FOUND`）；网络错误为 `ERROR`。不写入库。
+   * **按标题查找候选（`find`）**：OpenAlex `title.search` 检索（无结果时回退到 `search`），按标题相似度排序，可用 `--author` 过滤；只给候选，不入库（Crossref 标题检索效果较差，不使用）。可选 `OPENALEX_API_KEY`。
 2. **多样化导出与格式化渲染（Rich Exports）**
    * `ibid export [<collection>] --format <fmt> --style <csl>`：
      * **Markdown / Plain-text 参考文献列表**：支持 Nature、APA、Vancouver、GB/T 7714 等常用格式，按清单顺序直接输出带编号 `[1]` 或 Author-Year 的文本，一键贴入 PPT 或文稿。
+       已实现样式：`apa`、`vancouver`（默认）、`harvard`、`nature`、`gb7714`、`gb7714-2025`，由 `@citation-js/core` 进程内渲染，后三者的 CSL 及 zh-CN 区域文件 vendored 于 `styles/`。为使中英文混排时英文条目用 “et al.”、中文条目用“等”，逐条按条目语言渲染后自行编号拼接。不使用 pandoc / hayagriva。
      * **标准格式导出**：导出干净、去重后的 `.bib` (BibTeX) 或 `CSL-JSON` 文件。
      * **证据速查表导出（Dossier / Matrix Table）**：导出包含“序号 | 作者年份 | 标题 | 核心结论/备注 | DOI 链接”的 Markdown 表格，方便做 PPT 或写综述时快速对照。
 3. **CLI 交互体验打磨**

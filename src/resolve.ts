@@ -75,7 +75,8 @@ export const RawCsl = Schema.Struct({
   DOI: Schema.optionalKey(Schema.String),
   PMID: Schema.optionalKey(StrOrNum),
   PMCID: Schema.optionalKey(StrOrNum),
-  URL: Schema.optionalKey(Schema.String)
+  URL: Schema.optionalKey(Schema.String),
+  language: Schema.optionalKey(Schema.String)
 })
 
 // Registry (mostly Crossref) work types -> CSL types.
@@ -145,7 +146,8 @@ export const normalizeCsl = (raw: typeof RawCsl.Type): Csl => {
     DOI: raw.DOI?.trim().toLowerCase(),
     PMID: str(raw.PMID),
     PMCID: str(raw.PMCID),
-    URL: raw.URL
+    URL: raw.URL,
+    language: raw.language?.trim() || undefined
   }
   return decodeCsl(Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)))
 }

@@ -1,6 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/http"
 import { TestClock, TestConsole } from "effect/testing"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -713,17 +713,28 @@ describe("CLI contracts", () => {
   })
 
   test("a registry that never answers or stalls mid-body times out as an UpstreamError", async () => {
-    const hang = Layer.succeed(HttpClient.HttpClient)(HttpClient.make(() => Effect.never))
-    const stalledBody = Layer.succeed(HttpClient.HttpClient)(HttpClient.make((request) =>
-      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(new ReadableStream({ start() {} }), { status: 200 })))
-    ))
-    for (const effect of [
-      parseId("doi:10.1234/slow").pipe(Effect.flatMap(fetchCsl), Effect.provide(hang)),
-      parseId("doi:10.1234/stalled").pipe(Effect.flatMap(fetchCsl), Effect.provide(stalledBody)),
-      findCandidates("stalled search").pipe(Effect.provide(stalledBody))
+    const stalledBody = (gate: Deferred.Deferred<void>) =>
+      Layer.succeed(HttpClient.HttpClient)(HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response(new ReadableStream({
+          pull() {
+            Deferred.doneUnsafe(gate, Exit.void)
+          }
+        }), { status: 200 })))
+      ))
+    for (const makeEffect of [
+      (gate: Deferred.Deferred<void>) =>
+        parseId("doi:10.1234/slow").pipe(
+          Effect.flatMap(fetchCsl),
+          Effect.provide(Layer.succeed(HttpClient.HttpClient)(HttpClient.make(() => Deferred.succeed(gate, undefined).pipe(Effect.andThen(Effect.never)))))
+        ),
+      (gate: Deferred.Deferred<void>) => parseId("doi:10.1234/stalled").pipe(Effect.flatMap(fetchCsl), Effect.provide(stalledBody(gate))),
+      (gate: Deferred.Deferred<void>) => findCandidates("stalled search").pipe(Effect.provide(stalledBody(gate)))
     ]) {
       const exit = await Effect.runPromise(Effect.gen(function*() {
-        const fiber = yield* Effect.forkChild(effect)
+        const gate = yield* Deferred.make<void>()
+        const fiber = yield* Effect.forkChild(makeEffect(gate))
+        yield* Deferred.await(gate)
+        yield* Effect.yieldNow
         yield* TestClock.adjust("21 seconds")
         return yield* Fiber.await(fiber)
       }).pipe(Effect.provide(TestClock.layer())))

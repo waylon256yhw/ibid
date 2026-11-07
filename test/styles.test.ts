@@ -1,6 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http"
 import { TestClock, TestConsole } from "effect/testing"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -113,11 +113,18 @@ describe("--style resolution", () => {
     expect(message).toEndWith(") and no cached copy")
     expect(message).not.toContain("\n")
 
-    const stalled = Layer.succeed(HttpClient.HttpClient)(HttpClient.make((request) =>
-      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(new ReadableStream({ start() {} }), { status: 200 })))
-    ))
     const timedOut = await Effect.runPromise(Effect.gen(function*() {
+      const gate = yield* Deferred.make<void>()
+      const stalled = Layer.succeed(HttpClient.HttpClient)(HttpClient.make((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response(new ReadableStream({
+          pull() {
+            Deferred.doneUnsafe(gate, Exit.void)
+          }
+        }), { status: 200 })))
+      ))
       const fiber = yield* resolveStyle("stalled-style").pipe(Effect.provide(Layer.mergeAll(BunServices.layer, stalled)), Effect.forkChild)
+      yield* Deferred.await(gate)
+      yield* Effect.yieldNow
       yield* TestClock.adjust("21 seconds")
       return yield* Fiber.await(fiber)
     }).pipe(Effect.provide(TestClock.layer())))

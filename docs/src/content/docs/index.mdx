@@ -47,6 +47,7 @@ sidebar:
     ibid col create q4-deck --title "Q4 组会"
     ibid col add q4-deck pmid:29618526 arxiv:1706.03762 10.1038/s41586-020-2649-2 --context "Slide 3"
     ibid export q4-deck --style gb7714
+    ibid export q4-deck --format brief          # PPT 页脚短引文：Harris et al., *Nature*, 2020
     ibid export q4-deck --format rtf | pbcopy
     ```
   </Step>
@@ -87,7 +88,7 @@ ibid where --json   # 输出：{"root": "...", "rule": "..."}
     查看 [交付物集合编排](/collections/)，了解如何围绕 PPT、论文或课题维护有序引用清单。
   </Card>
   <Card title="导出与引文样式" icon="ph:export">
-    查看 [导出与引文样式](/export/)，了解 7 种导出格式、CSL 仓库样式自动拉取与中英混排规则。
+    查看 [导出与引文样式](/export/)，了解 8 种导出格式、PPT 页脚短引文、CSL 仓库样式自动拉取与中英混排规则。
   </Card>
   <Card title="文稿核验与按标题检索" icon="ph:shield-check">
     查看 [文稿核验与按标题检索](/verify-and-find/)，了解 `.bib`/`.md`/`.docx` 核验、引用编号检查与 OpenAlex 检索。

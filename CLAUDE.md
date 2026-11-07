@@ -22,7 +22,7 @@ ibid/
 │   ├── clean.ts            入库文本清洗：HTML 实体解码与行内标签（i/b/sub/sup）规整
 │   ├── store.ts            本地库发现规则（findStore）、原子 JSON 读写（writeJsonAtomic）、主键查找（findItem）、本地更正（effective）与手工条目（addManual）
 │   ├── collections.ts      集合文件读写与纯函数列表操作（1-based 位置插入、移动、稳定排序、去重合并、引用检查删除）
-│   ├── export.ts           懒加载 citation-js、CSL 样式解析与远程缓存、中英混排分组渲染、7 种导出格式（md/text/html/rtf/bibtex/csl-json/dossier）
+│   ├── export.ts           懒加载 citation-js、CSL 样式解析与远程缓存、中英混排分组渲染、8 种导出格式（md/text/html/rtf/brief/bibtex/csl-json/dossier）与 PPT 短引文（brief/brief-num）
 │   ├── find.ts             OpenAlex 标题检索（title.search + search 回退）、相似度排序与作者姓氏过滤
 │   ├── verify.ts           `.bib`、Markdown/纯文本及 `.docx` 核验主流程（上下文切分、字段比对、缺失细节检查、未识别列表项检测）
 │   ├── numbering.ts        正文数字引用（`[1]`, `[3–5]`）与编号参考文献列表的交叉核查（缺项、未引、乱序、断号、重号、重复文献）

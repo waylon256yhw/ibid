@@ -8,7 +8,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import crossref from "./fixtures/crossref-numpy.json" with { type: "json" }
 import datacite from "./fixtures/datacite-arxiv.json" with { type: "json" }
-import { citeLib, type CslStyle, isNumeric, parentOf, render, renderList, resolveStyle } from "../src/export.ts"
+import { briefAuthor, briefVenue, citeLib, type CslStyle, isNumeric, parentOf, render, renderBrief, renderList, resolveStyle, sortsEntries } from "../src/export.ts"
 import { normalizeCsl, RawCsl } from "../src/resolve.ts"
 import type { Csl, Item } from "../src/schema.ts"
 
@@ -236,5 +236,67 @@ describe("rich output", () => {
     expect(lines[1]).toStartWith("Harris")
     expect(lines[2]).toStartWith("Vaswani")
     expect((await renderList([attention, zh, numpy], zhAuthorDate, "md", true))[0]).toStartWith("Vaswani")
+  })
+})
+
+describe("brief slide citations", () => {
+  const item = (canonical: Csl): Item => ({
+    id: "x",
+    canonical,
+    verification: { source: "doi.org", url: "u", fetchedAt: "t", sha256: "h", titleMatch: "UNCHECKED" },
+    evidences: [],
+    tags: []
+  })
+
+  test("author and venue slots: 1, 2 and 3+ authors in English and Chinese; venue fallback chain", () => {
+    const one: Csl = { type: "article-journal", title: "Relativity", author: [{ family: "Einstein", given: "A." }], "container-title-short": "Ann. Phys.", "container-title": "Annalen der Physik", issued: { "date-parts": [[1905]] } }
+    const three: Csl = { ...numpy, author: [...numpy.author!, { family: "van der Walt", given: "S. J." }] }
+    const zh1: Csl = { type: "article-journal", title: "中文一", author: [{ family: "王", given: "五" }], "container-title": "中国科学", issued: { "date-parts": [[2023]] } }
+    const zh2: Csl = { type: "article-journal", title: "中文二", author: [{ family: "张", given: "三" }, { literal: "李四" }], "container-title": "计算机学报", issued: { "date-parts": [[2024]] } }
+    const book: Csl = { type: "book", title: "Biomechanics", author: [{ family: "Fung" }], publisher: "Springer", issued: { "date-parts": [[1993]] } }
+    const bare: Csl = { type: "document", title: "Note" }
+
+    expect(renderBrief([one, numpy, three, attention, zh1, zh2, zh, book, bare], "md")).toEqual([
+      "Einstein, *Ann. Phys.*, 1905",
+      "Harris & Millman, *Nature*, 2020",
+      "Harris et al., *Nature*, 2020",
+      "Vaswani et al., *arXiv*, 2017",
+      "王五, *中国科学*, 2023",
+      "张三, 李四, *计算机学报*, 2024",
+      "崔巍 等, *计算机工程*, 2011",
+      "Fung, *Springer*, 1993",
+      "n.d."
+    ])
+    expect(briefAuthor(bare)).toBeUndefined()
+    expect(briefVenue({ type: "chapter", title: "Ch", "collection-title": "LNCS", publisher: "Springer" })).toBe("LNCS")
+  })
+
+  test("works as --style brief / brief-num across md, text, html, rtf and as --format brief, keeping collection order", async () => {
+    expect(await sortsEntries("brief")).toBe(false)
+    expect(await sortsEntries("brief-num")).toBe(false)
+    expect(await sortsEntries("apa")).toBe(true)
+    expect(await sortsEntries("vancouver")).toBe(false)
+
+    const manual: Item = { id: "manual:0123456789", manual: "Doe J. Internal slide deck; 2022.", evidences: [], tags: [] }
+    const rows = [{ item: item(attention) }, { item: manual }, { item: item(numpy) }]
+
+    expect(await render(rows, "brief", "vancouver")).toBe(
+      "Vaswani et al., *arXiv*, 2017\nDoe J. Internal slide deck; 2022.\nHarris & Millman, *Nature*, 2020"
+    )
+    expect(await render(rows, "brief", "brief-num")).toBe(
+      "[1] Vaswani et al., *arXiv*, 2017\n[2] Doe J. Internal slide deck; 2022.\n[3] Harris & Millman, *Nature*, 2020"
+    )
+    expect(await render(rows, "text", "brief")).toBe(
+      "Vaswani et al., arXiv, 2017\nDoe J. Internal slide deck; 2022.\nHarris & Millman, Nature, 2020"
+    )
+    expect(await render(rows, "text", "brief-num")).toBe(
+      "[1] Vaswani et al., arXiv, 2017\n[2] Doe J. Internal slide deck; 2022.\n[3] Harris & Millman, Nature, 2020"
+    )
+    const html = await render(rows, "html", "brief-num")
+    expect(html).toContain(`<span style="display:inline-block;min-width:2.5em">[1] </span>Vaswani et al., <i>arXiv</i>, 2017</p>`)
+    expect(html).toContain(`<span style="display:inline-block;min-width:2.5em">[2] </span>Doe J. Internal slide deck; 2022.</p>`)
+    const rtf = await render([{ item: item(zh) }, { item: item(numpy) }], "rtf", "brief")
+    expect(rtf).toContain(`{\\i{}\\uc0\\u-29791{}\\uc0\\u31639{}`)
+    expect(rtf).toContain(`Harris & Millman, {\\i{}Nature}, 2020\\par`)
   })
 })

@@ -33,23 +33,26 @@ export const citeLib = () =>
 
 // ---------- styles and formats ----------
 
-/** Built-in name -> citation-js template. Everything else about a style is read from its CSL. */
+/** Built-in name -> citation-js template (or `"brief"` / `"brief-num"` for short slide-footer citations). */
 export const STYLES = {
   apa: "apa",
   vancouver: "vancouver",
   harvard: "harvard1",
   nature: "nature",
   gb7714: "gb7714",
-  "gb7714-2025": "gb7714-2025"
+  "gb7714-2025": "gb7714-2025",
+  brief: "brief",
+  "brief-num": "brief-num"
 } as const
 export type Style = keyof typeof STYLES
 /** A style from a file or the CSL repository: the name it is registered under and its (independent) XML. */
 export type CslStyle = { name: string; xml: string }
 
-export const FORMATS = ["md", "text", "html", "rtf", "bibtex", "csl-json", "dossier"] as const
+export const FORMATS = ["md", "text", "html", "rtf", "brief", "bibtex", "csl-json", "dossier"] as const
 export type Format = (typeof FORMATS)[number]
 export type ListFormat = "md" | "text" | "html" | "rtf"
 export const isList = (f: Format): f is ListFormat => f === "md" || f === "text" || f === "html" || f === "rtf"
+export const isBrief = (style: Style | CslStyle): style is "brief" | "brief-num" => style === "brief" || style === "brief-num"
 
 /** `<category citation-format="numeric"/>`: numbered by position in collection order. */
 export const isNumeric = (xml: string) => /<category\b[^>]*\bcitation-format="numeric"/.test(xml)
@@ -232,6 +235,63 @@ const manualEntry = (text: string, format: ListFormat, label?: string) => {
 export const styleXml = async (style: Style | CslStyle) =>
   typeof style === "string" ? (await citeLib()).plugins.config.get("@csl").styles.get(STYLES[style]) as string : style.xml
 
+/** Whether `style` sorts entries by default (numeric and `brief` styles keep collection order). */
+export const sortsEntries = async (style: Style | CslStyle) =>
+  isBrief(style) ? false : !isNumeric(await styleXml(style))
+
+const shortName = (a: NonNullable<Csl["author"]>[number]) =>
+  a.family && a.given && /\p{Script=Han}/u.test(a.family) && /\p{Script=Han}/u.test(a.given)
+    ? `${a.family}${a.given}`
+    : a.family ?? a.literal ?? a.given ?? ""
+
+/** Short author attribution for a slide footer: `Harris et al.`, `Smith & Doe`, `张三, 李四`, `张三 等`. */
+export const briefAuthor = (c: Csl) => {
+  const names = (c.author ?? []).map((a) => plain(shortName(a))).filter(Boolean)
+  if (names.length === 0) return undefined
+  if (names.length === 1) return names[0]!
+  const zh = isChinese(c)
+  if (names.length === 2) return zh ? `${names[0]}, ${names[1]}` : `${names[0]} & ${names[1]}`
+  return zh ? `${names[0]} 等` : `${names[0]} et al.`
+}
+
+/** Short venue for a slide footer: short journal, full journal, `arXiv`, series or publisher. */
+export const briefVenue = (c: Csl) => {
+  const raw = c["container-title-short"]
+    ?? c["container-title"]
+    ?? (arxivId(c) ? "arXiv" : undefined)
+    ?? c["collection-title"]
+    ?? c.publisher
+  return raw ? plain(raw) || undefined : undefined
+}
+
+/** Compact `<Author>, *<Venue>*, <Year>` slide-footer citations in list order, optionally numbered (`[n]`). */
+export const renderBrief = (list: ReadonlyArray<Csl | string>, format: ListFormat, numbered = false) =>
+  list.map((c, i) => {
+    const n = numbered ? i + 1 : undefined
+    const label = n === undefined ? undefined : `[${n}]`
+    if (typeof c === "string") {
+      if (format === "html") return htmlEntry(manualEntry(c, "html", label), n)
+      if (format === "rtf") return rtfEntry(manualEntry(c, "rtf", label), n)
+      return label ? `${label} ${c}` : c
+    }
+    const author = briefAuthor(c)
+    const venue = briefVenue(c)
+    const y = String(year(c) ?? "n.d.")
+    if (format === "html") {
+      const body = [author && escapeHtml(author), venue && `<i>${escapeHtml(venue)}</i>`, escapeHtml(y)].filter(Boolean).join(", ")
+      return htmlEntry(
+        label ? `<div class="csl-entry"><div class="csl-left-margin">${label}</div><div class="csl-right-inline">${body}</div></div>` : `<div class="csl-entry">${body}</div>`,
+        n
+      )
+    }
+    if (format === "rtf") {
+      const body = [author && escapeRtf(author), venue && `{\\i{}${escapeRtf(venue)}}`, escapeRtf(y)].filter(Boolean).join(", ")
+      return rtfEntry(label ? `${label}\\tab ${body}` : body, n)
+    }
+    const body = [author, venue && (format === "md" ? `*${venue}*` : venue), y].filter(Boolean).join(", ")
+    return label ? `${label} ${body}` : body
+  })
+
 /**
  * One rendered entry per item, in list order; `html` and `rtf` entries are paragraphs for `render` to wrap.
  * A string is a manual entry: printed as written, numbered like the rest in a numeric style, and
@@ -245,6 +305,7 @@ export const styleXml = async (style: Style | CslStyle) =>
  * Other styles render everything in their default locale when it is loaded, else en-US.
  */
 export const renderList = async (list: ReadonlyArray<Csl | string>, style: Style | CslStyle, format: ListFormat, keepOrder = false) => {
+  if (isBrief(style)) return renderBrief(list, format, style === "brief-num")
   const { Cite, plugins } = await citeLib()
   const registry = plugins.config.get("@csl")
   const name = typeof style === "string" ? STYLES[style] : style.name
@@ -423,6 +484,8 @@ export const render = (rows: ReadonlyArray<Row>, format: Format, style: Style | 
       return renderList(csls, style, format, keepOrder).then(htmlList)
     case "rtf":
       return renderList(csls, style, format, keepOrder).then(rtfList)
+    case "brief":
+      return Promise.resolve(renderBrief(csls, "md", style === "brief-num").join("\n"))
     case "bibtex":
       return renderBibtex(csls)
     case "csl-json":

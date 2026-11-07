@@ -5,7 +5,7 @@ import { Argument, Command, Flag } from "effect/cli"
 import { FetchHttpClient } from "effect/http"
 import { col } from "./col.ts"
 import { deleteItem } from "./collections.ts"
-import { exportRows, FORMATS, isList, isNumeric, render, resolveStyle, STYLES, styleXml } from "./export.ts"
+import { exportRows, FORMATS, isList, render, resolveStyle, sortsEntries, STYLES } from "./export.ts"
 import { findCandidates, findLine } from "./find.ts"
 import { VERSION } from "./resolve.ts"
 import { isManual, type Overrides } from "./schema.ts"
@@ -167,20 +167,20 @@ const where = Command.make("where", { json }, handle(Effect.fn(function*({ json 
 
 const exportCmd = Command.make("export", {
   name: Argument.String("collection").pipe(Argument.withDescription("Collection to export; every stored item when omitted"), Argument.optional),
-  format: Flag.Literals("format", FORMATS).pipe(Flag.withDescription("md, text, html, rtf, bibtex, csl-json or dossier"), Flag.withDefault("md" as const)),
+  format: Flag.Literals("format", FORMATS).pipe(Flag.withDescription("md, text, html, rtf, brief, bibtex, csl-json or dossier"), Flag.withDefault("md" as const)),
   style: Flag.String("style").pipe(
-    Flag.withDescription(`${Object.keys(STYLES).join(", ")}, a path to a .csl file, or any style name from the CSL repository (fetched once, cached in the store); md, text, html and rtf only`),
+    Flag.withDescription(`${Object.keys(STYLES).join(", ")}, a path to a .csl file, or any style name from the CSL repository (fetched once, cached in the store); md, text, html and rtf only (or brief-num with --format brief)`),
     Flag.withDefault("vancouver")
   ),
   keepOrder: Flag.Boolean("keep-order").pipe(
-    Flag.withDescription("Keep collection order in a non-numeric style instead of the style's sort (numeric styles always keep it)"),
+    Flag.withDescription("Keep collection order in a non-numeric style instead of the style's sort (numeric and brief styles always keep it)"),
     Flag.withDefault(false)
   )
 }, handle(Effect.fn(function*({ format, keepOrder, name, style }) {
   const rows = yield* exportRows(Option.getOrUndefined(name))
-  const resolved = isList(format) ? yield* resolveStyle(style) : "vancouver"
+  const resolved = isList(format) ? yield* resolveStyle(style) : style === "brief-num" ? "brief-num" : "vancouver"
   const manual = rows.filter((r) => isManual(r.item)).length
-  if (isList(format) && manual > 0 && !keepOrder && !isNumeric(yield* Effect.promise(() => styleXml(resolved)))) {
+  if (isList(format) && manual > 0 && !keepOrder && (yield* Effect.promise(() => sortsEntries(resolved)))) {
     yield* Console.error(`note: ${style} sorts its entries; ${manual} manual entr${manual === 1 ? "y is" : "ies are"} listed last (--keep-order keeps collection order)`)
   }
   const out = yield* Effect.tryPromise({
@@ -188,7 +188,7 @@ const exportCmd = Command.make("export", {
     catch: (e) => usage(`cannot render with style ${style}: ${e instanceof Error ? e.message : String(e)}`)
   })
   yield* Console.log(out)
-}))).pipe(Command.withDescription("Print a collection or the whole store as a reference list (Markdown, text, HTML or RTF), BibTeX, CSL-JSON or a dossier table"))
+}))).pipe(Command.withDescription("Print a collection or the whole store as a reference list (Markdown, text, HTML, RTF or brief slide citations), BibTeX, CSL-JSON or a dossier table"))
 
 const find = Command.make("find", {
   title: Argument.String("title").pipe(Argument.withDescription("Title words"), Argument.atLeast(1)),

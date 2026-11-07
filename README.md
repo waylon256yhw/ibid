@@ -31,8 +31,9 @@ ibid add pmid:29618526 arxiv:1706.03762
 ibid col create q4-deck --title "Q4 组会"
 ibid col add q4-deck pmid:29618526 arxiv:1706.03762 10.1038/s41586-020-2649-2 --context "Slide 3"
 
-# 4. 导出参考文献表（支持 md / text / html / rtf / bibtex / csl-json / dossier）
+# 4. 导出参考文献表（支持 md / text / html / rtf / brief / bibtex / csl-json / dossier）
 ibid export q4-deck --style gb7714
+ibid export q4-deck --format brief          # 组会/演讲 PPT 页脚短引文：Harris et al., *Nature*, 2020
 ibid export q4-deck --format rtf | pbcopy   # macOS：以富文本复制，直接粘贴进 Word / Pages / WPS
 
 # 5. 对现有 .bib、Markdown 或 Word (.docx) 文稿做交叉核验与引用编号检查
@@ -48,7 +49,7 @@ ibid verify manuscript.docx
 - **有状态的本地纯文本产物（File-first Local Store）**
   按 `IBID_DIR` $\rightarrow$ 向上最近的 `.ibid/` $\rightarrow$ 全局 `${XDG_DATA_HOME:-~/.local/share}/ibid` 自动定位存储库。单篇文献（`items/`）、二手阅读笔记（`evidences`）、本地字段修正（`overrides`，与原始权威记录 `canonical` 严格隔离）以及按交付物编排的有序清单（`collections/`）全部以纯文本 JSON 存储，对 Git 与 Agent 完全透明。
 - **多样式排版与文稿反查（Export & Audit）**
-  进程内集成 `@citation-js/core`，内置 `vancouver`（默认）、`apa`、`harvard`、`nature`、`gb7714`、`gb7714-2025`（自动处理中英混排的“等”与“et al.”），并支持按需从 CSL 官方仓库下载并缓存任意期刊样式；`verify` 支持直接读取 `.bib`、`.md` 与 `.docx` 文件，逐条核对元数据及 `[1]`、`[3–5]` 正文引用编号。
+  进程内集成 `@citation-js/core`，内置 `vancouver`（默认）、`apa`、`harvard`、`nature`、`gb7714`、`gb7714-2025`（自动处理中英混排的“等”与“et al.”）以及面向 PPT 页脚的极简短引文样式 `brief` / `brief-num`，并支持按需从 CSL 官方仓库下载并缓存任意期刊样式；`verify` 支持直接读取 `.bib`、`.md` 与 `.docx` 文件，逐条核对元数据及 `[1]`、`[3–5]` 正文引用编号。
 - **人类与 Agent 双模 CLI（Unix & Agent Ergonomics）**
   默认输出适合终端阅读与管道组合的紧凑 Tab 分隔行；传入 `--json` 时（除命令行参数语法错误仍输出标准 CLI 帮助与错误信息外）严格在 `stdout` 输出单个结构化 JSON 值，失败时 `stderr` 静默并以退出码 `1` 结束。对同一文献库的写入命令应串行执行。
 
@@ -66,7 +67,7 @@ ibid verify manuscript.docx
 | `ibid note <id> <text> [--source ...]` | 向条目的 `evidences` 追加阅读笔记或二手调研结论 |
 | `ibid rm <id...> [--force]` | 删除本地条目（被集合引用时需 `--force` 一并移出） |
 | `ibid col <create\|ls\|show\|add\|rm\|move\|sort\|merge\|delete>` | 管理面向单个交付物（PPT、论文、课题）的有序文献集合 |
-| `ibid export [collection] [--format ...] [--style ...] [--keep-order]` | 导出参考文献列表（`md`/`text`/`html`/`rtf`）、`bibtex`、`csl-json` 或 `dossier` 速查表 |
+| `ibid export [collection] [--format ...] [--style ...] [--keep-order]` | 导出参考文献列表（`md`/`text`/`html`/`rtf`）、PPT 页脚短引文（`brief`）、`bibtex`、`csl-json` 或 `dossier` 速查表 |
 | `ibid find <title...> [--author ...] [--rows ...]` | 通过 OpenAlex 按标题检索候选文献（只给候选，不直接入库） |
 | `ibid verify <file.bib \| file.md \| file.docx>` | 交叉核验文稿或 `.bib` 中的引用真实性、字段完整性与引用编号顺序 |
 | `ibid init` / `ibid where` | 在当前目录初始化项目级 `.ibid/` 库 / 查看当前生效的库路径与命中规则 |

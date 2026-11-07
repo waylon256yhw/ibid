@@ -1,6 +1,6 @@
 ---
 title: 导出与引文样式
-description: 支持 7 种导出格式、内置与官方 CSL 样式按需下载缓存、以及 GB/T 7714 中英文混排处理。
+description: 支持 8 种导出格式、PPT 页脚短引文、内置与官方 CSL 样式按需下载缓存、以及 GB/T 7714 中英文混排处理。
 sidebar:
   order: 4
 ---
@@ -13,6 +13,8 @@ ibid export q4-deck --style gb7714 --format text
 ibid export q4-deck --style ieee             # CSL 官方仓库中的任意样式名，首次使用时自动下载并缓存
 ibid export q4-deck --style ./my-journal.csl # 本地 .csl 文件路径
 ibid export q4-deck --style apa --keep-order # 非编号样式默认按样式自身排序；此选项强制保持集合顺序
+ibid export q4-deck --format brief           # PPT 页脚短引文：Harris et al., *Nature*, 2020（加 --style brief-num 带 [1] 编号）
+ibid export q4-deck --style brief --format rtf | pbcopy # 以富文本复制短引文，直接粘贴进 PowerPoint / Keynote
 ibid export q4-deck --format rtf | pbcopy    # macOS：以富文本放入剪贴板，可直接粘贴进 Word / Pages / WPS
 ibid export q4-deck --format html > refs.html
 ibid export --format bibtex > refs.bib       # 不给集合名时导出整个本地库
@@ -29,6 +31,7 @@ ibid export q4-deck --format dossier         # Markdown 证据速查表：序号
 | `text` | 纯文本参考文献列表，每行一条。 |
 | `html` | 自包含的 HTML 片段（带 `<meta charset="utf-8">`），保留斜体、粗体、上标、下标；非编号样式采用悬挂缩进，编号样式的序号放在固定宽度容器中对齐。在浏览器打开后复制或直接粘贴进 Word / Google Docs 可保留全部排版。 |
 | `rtf` | 完整的 RTF 文档：保存为 `.rtf` 可直接用 Word 打开；在 macOS 上通过 `\| pbcopy` 即可作为富文本写入剪贴板（以 `{\rtf1` 开头的输入会被系统剪贴板识别为富文本）。中文字符、弯引号、破折号等均以 `\uN` 转义保留；每条带 0.5 英寸悬挂缩进，编号样式的序号后带制表符 `\tab`。 |
+| `brief` | 面向组会与学术演讲 PPT 页脚的极简短引文（`<Author>, *<Venue>*, <Year>`，如 `Harris et al., *Nature*, 2020`、`Smith & Doe, *Phys. Rev. Lett.*, 2023`、`崔巍 等, *计算机工程*, 2011`），始终保持集合顺序；搭配 `--style brief-num` 时输出带 `[1]` 序号前缀的短引文。 |
 | `bibtex` | 中文字符原样保留。引用键（citation key）为纯 ASCII（如 `harris2020array`）：若作者名不含拉丁字母则生成 `ref<年份><6 位哈希>`；若两个拉丁键发生 `<姓><年份><首词>` 基础键碰撞，相撞条目各自追加自身 6 位短哈希（仅取决于条目自身的 DOI、PMID 或标题，与导出顺序无关）。**注意**：新增或删除发生基础键碰撞的条目会使相关条目的引用键在短键与带哈希键之间切换；重新导出后，需要同步更新稿件中的 `\cite{...}` 引用。arXiv 预印本（DOI 为 `10.48550/arxiv.*` 且无期刊）自动补充 `journal = {arXiv preprint arXiv:<id>}`。 |
 | `csl-json` | 输出应用本地更正后的标准 CSL-JSON 数组（每项带本地主键 `id`；手工条目带 `"custom": {"ibid-manual": true}`）。 |
 | `dossier` | Markdown 矩阵速查表，包含 `序号 \| 作者年份 \| 标题 \| 备注 \| 链接` 五列。备注列自动合并集合条目的 `section`、`context` 与条目自身的 `evidences` 笔记，方便做 PPT 或写综述时对照。 |
@@ -41,7 +44,7 @@ ibid export q4-deck --format dossier         # Markdown 证据速查表：序号
 
 ## 引文样式解析（`--style`）
 
-`--style`（仅作用于 `md`、`text`、`html`、`rtf` 四种列表格式）按以下顺序解析：
+`--style`（作用于 `md`、`text`、`html`、`rtf` 四种列表格式，以及 `--format brief` 下的 `brief-num`）按以下顺序解析：
 
 1. **内置样式（离线可用）**：
    - `vancouver`（默认）
@@ -50,6 +53,7 @@ ibid export q4-deck --format dossier         # Markdown 证据速查表：序号
    - `nature`（随二进制内置）
    - `gb7714`（GB/T 7714-2015 顺序编码制，随二进制内置）
    - `gb7714-2025`（GB/T 7714-2025 顺序编码制，随二进制内置）
+   - `brief` / `brief-num`（PPT 页脚短引文 `<Author>, *<Venue>*, <Year>`，不编号 / 带 `[1]` 编号；可与 `md`、`text`、`html`、`rtf` 任意组合，且始终保持集合顺序。载体优先级为 `container-title-short` $\rightarrow$ `container-title` $\rightarrow$ `arXiv` $\rightarrow$ `collection-title` $\rightarrow$ `publisher`）
 2. **本地文件路径**：
    任何以 `.csl` 结尾的路径（如 `./my-journal.csl`）。
 3. **CSL 官方样式仓库按需拉取与缓存**：

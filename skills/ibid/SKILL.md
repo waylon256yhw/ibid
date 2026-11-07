@@ -7,12 +7,18 @@ description: Zero-hallucination local reference manager and citation verifier CL
 
 `ibid` decouples probabilistic literature discovery from deterministic registry verification (Crossref / `doi.org`, PubMed, PMC, DataCite), deliverable-scoped curation, multi-style formatting, and manuscript auditing.
 
-## Preflight: Running `ibid` & Locating the Store
+## Preflight: Locating `ibid` & the Store
 
-Invoke `ibid` directly if on `PATH`, or run it through the bundled wrapper script (which resolves symlinks back to the repository and builds `dist/ibid` if missing):
+Ensure `ibid` is available on `PATH` and check the active store location:
 
 ```bash
-"$(dirname "$0")/scripts/ensure-ibid.sh" where
+ibid where
+```
+
+If `ibid` is not installed on `PATH`, install it first with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/waylon256yhw/ibid/main/install.sh | bash
 ```
 
 Store discovery order (`ibid where`):

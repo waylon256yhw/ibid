@@ -104,28 +104,35 @@ describe("title with a label before it", () => {
   })
 })
 
-describe("skills/ibid progressive-disclosure skill", () => {
-  const skillDir = join(import.meta.dir, "..", "skills", "ibid")
+describe("skills/ibid progressive-disclosure skill & distribution", () => {
+  const rootDir = join(import.meta.dir, "..")
+  const skillDir = join(rootDir, "skills", "ibid")
 
-  test("SKILL.md frontmatter and Tier 2 references are present and linked", () => {
+  test("SKILL.md frontmatter and Tier 2 references are present and ensure-ibid.sh is removed", () => {
     const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8")
     expect(skill).toMatch(/^---\nname: ibid\ndescription: .+\n---\n/)
-    for (const rel of ["references/verify-remediation.md", "references/styles-and-overrides.md", "scripts/ensure-ibid.sh"]) {
+    for (const rel of ["references/verify-remediation.md", "references/styles-and-overrides.md"]) {
       expect(skill).toContain(rel)
       expect(existsSync(join(skillDir, rel))).toBe(true)
     }
+    expect(skill).not.toContain("ensure-ibid.sh")
+    expect(existsSync(join(skillDir, "scripts"))).toBe(false)
   })
 
-  test("ensure-ibid.sh resolves the repository binary even when invoked via a symlink", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "ibid-skill-"))
-    try {
-      const linked = join(tmp, "ibid")
-      symlinkSync(skillDir, linked)
-      const proc = Bun.spawnSync([join(linked, "scripts", "ensure-ibid.sh")], { cwd: tmp })
-      expect(proc.exitCode).toBe(0)
-      expect(proc.stdout.toString().trim()).toEndWith("/ibid")
-    } finally {
-      rmSync(tmp, { recursive: true, force: true })
-    }
+  test("release ZIP packager and postinstall extractor round-trip a binary payload", async () => {
+    const { createSingleFileZip } = await import("../scripts/package-release.ts")
+    const { extractZipEntry, resolveTarget } = await import("../scripts/postinstall.mjs")
+    const payload = new TextEncoder().encode("#!/usr/bin/env bash\necho ibid-test-payload\n")
+    const zip = createSingleFileZip("ibid-darwin-aarch64/ibid", payload)
+    const extracted = extractZipEntry(zip, (name: string) => name.endsWith("/ibid"))
+    expect(new TextDecoder().decode(extracted)).toBe("#!/usr/bin/env bash\necho ibid-test-payload\n")
+    expect(resolveTarget("darwin", "arm64")).toBe("ibid-darwin-aarch64")
+    expect(resolveTarget("win32", "x64")).toBe("ibid-windows-x64")
+  })
+
+  test("bin/ibid launcher executes and reports the package version", () => {
+    const proc = Bun.spawnSync([join(rootDir, "bin", "ibid"), "--version"], { cwd: rootDir })
+    expect(proc.exitCode).toBe(0)
+    expect(proc.stdout.toString().trim()).toBe("ibid v0.1.0")
   })
 })

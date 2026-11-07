@@ -1,15 +1,41 @@
 {
-  "name": "ibid",
-  "version": "0.0.0",
+  "name": "ibid-cli",
+  "version": "0.1.0",
+  "description": "Zero-hallucination local reference manager and citation verifier CLI for humans and AI Agents",
   "type": "module",
-  "private": true,
-  "bin": {
-    "ibid": "src/cli.ts"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waylon256yhw/ibid.git"
   },
+  "homepage": "https://waylon256yhw.github.io/ibid/",
+  "keywords": [
+    "bibliography",
+    "citation",
+    "csl",
+    "bibtex",
+    "doi",
+    "pubmed",
+    "arxiv",
+    "agent-skill",
+    "cli"
+  ],
+  "bin": {
+    "ibid": "bin/ibid"
+  },
+  "files": [
+    "bin/ibid",
+    "src/",
+    "styles/",
+    "scripts/postinstall.mjs",
+    "skills/"
+  ],
   "scripts": {
     "check": "bun check",
     "test": "bun test",
-    "build": "bun build --compile src/cli.ts --outfile dist/ibid"
+    "build": "bun build --compile src/cli.ts --outfile dist/ibid",
+    "build:release": "bun scripts/package-release.ts",
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
     "@citation-js/core": "0.9.0",

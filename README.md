@@ -10,15 +10,28 @@
 
 ## 快速上手（Quickstart）
 
-需要 [Bun](https://bun.sh) 1.3+。
+### 1. 安装 CLI 与 Agent Skill
+
+一键安装预编译单文件二进制（默认安装至 `~/.local/bin/ibid`，无需预装 Bun 或 Node.js）：
 
 ```bash
-bun install
-bun run build   # 编译为 dist/ibid 单文件可执行程序；开发时也可直接 bun src/cli.ts <命令>
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/waylon256yhw/ibid/main/install.sh | bash
 
-# 可选：将渐进式披露 Agent Skill 软链到全局 Agent 技能目录，使 Agent 在任意工作区自动调用 ibid
-ln -s "$PWD/skills/ibid" ~/.claude/skills/ibid
+# Windows PowerShell
+powershell -c "irm https://raw.githubusercontent.com/waylon256yhw/ibid/main/install.ps1 | iex"
+
+# 或通过 Bun / npm 全局安装
+bun add -g github:waylon256yhw/ibid
 ```
+
+安装内置的渐进式披露 Agent Skill，让 Coding Agent（Claude Code、Gemini CLI、Cursor 等）在任意论文、PPT 或笔记工作区自动调用 `ibid`：
+
+```bash
+npx -y skills add waylon256yhw/ibid --skill ibid --global --yes
+```
+
+### 2. 典型工作流
 
 从检索、防伪入库、归集到导出与文稿反查的典型工作流：
 

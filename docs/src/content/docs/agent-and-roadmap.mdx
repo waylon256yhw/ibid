@@ -9,16 +9,18 @@ sidebar:
 
 ## 渐进式披露 Agent Skill（`skills/ibid/`）
 
-仓库内置 [`skills/ibid/`](https://github.com/waylon256yhw/ibid/tree/main/skills/ibid)，可软链到全局 Agent 技能目录（如 `~/.claude/skills/ibid` 或 `~/.gemini/config/skills/ibid`），让 Agent 在任意论文、PPT 或实验笔记仓库中开箱即用：
+仓库内置 [`skills/ibid/`](https://github.com/waylon256yhw/ibid/tree/main/skills/ibid)，可通过 `skills` CLI 一键安装到全局 Agent 技能目录，让 Agent 在任意论文、PPT 或实验笔记仓库中开箱即用：
+
+```bash
+npx -y skills add waylon256yhw/ibid --skill ibid --global --yes
+```
 
 ```text
 skills/ibid/
 ├── SKILL.md                           # Tier 1：防幻觉铁律、人机决策边界与 4 条核心工作流闭环
-├── references/                        # Tier 2：仅在遇到复杂核验或样式问题时按需加载
-│   ├── verify-remediation.md          # verify 状态码诊断、.docx 段落映射与编号修复指南
-│   └── styles-and-overrides.md        # 导出格式/样式、PPT 短引文、中英混排、override 与手工条目详解
-└── scripts/
-    └── ensure-ibid.sh                 # 解析符号链接定位 dist/ibid 或 PATH 中的可执行文件（缺失时自动编译）
+└── references/                        # Tier 2：仅在遇到复杂核验或样式问题时按需加载
+    ├── verify-remediation.md          # verify 状态码诊断、.docx 段落映射与编号修复指南
+    └── styles-and-overrides.md        # 导出格式/样式、PPT 短引文、中英混排、override 与手工条目详解
 ```
 
 ## `--json` 结构化输出与错误契约

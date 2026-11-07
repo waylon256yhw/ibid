@@ -1,8 +1,11 @@
 node_modules/
 dist/
+bin/ibid-bin
+bin/ibid-bin.exe
 .DS_Store
 *.log
 .env
 .env.*
 .ibid/
 *.bun-build
+.*.bun-build

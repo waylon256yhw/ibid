@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+import { existsSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
+import { binaryPath, ensureBinary } from "../scripts/postinstall.mjs"
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const rootDir = join(__dirname, "..")
+const args = process.argv.slice(2)
+
+const run = (cmd, cmdArgs) => {
+  const res = spawnSync(cmd, cmdArgs, { stdio: "inherit" })
+  if (res.error) return false
+  process.exit(res.status ?? 1)
+}
+
+// 1. Prebuilt platform binary installed by postinstall
+if (existsSync(binaryPath)) {
+  run(binaryPath, args)
+}
+
+// 2. Local compiled binary in repo checkout (`dist/ibid`)
+const repoDist = join(rootDir, "dist", process.platform === "win32" ? "ibid.exe" : "ibid")
+if (existsSync(repoDist)) {
+  run(repoDist, args)
+}
+
+// 3. Direct execution via Bun if available on PATH and `src/cli.ts` is shipped
+const cliTs = join(rootDir, "src", "cli.ts")
+if (existsSync(cliTs)) {
+  run("bun", [cliTs, ...args])
+}
+
+// 4. Lazy bootstrap if installed with `--ignore-scripts` on a Node-only machine
+try {
+  const downloaded = await ensureBinary()
+  run(downloaded, args)
+} catch (err) {
+  console.error(`ibid: failed to locate or download executable (${err.message || err})`)
+  console.error(`Install directly via: curl -fsSL https://raw.githubusercontent.com/waylon256yhw/ibid/main/install.sh | bash`)
+  process.exit(1)
+}

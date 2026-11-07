@@ -28,10 +28,17 @@ ibid/
 │   ├── numbering.ts        正文数字引用（`[1]`, `[3–5]`）与编号参考文献列表的交叉核查（缺项、未引、乱序、断号、重号、重复文献）
 │   ├── docx.ts             零外部依赖的 `.docx`（ZIP + WordprocessingML）文本提取器（段落、修订、域代码、DOI 超链接、自动编号、脚注/尾注）
 │   └── text.d.ts           `.csl` 与 `.xml` 文本导入的 TypeScript 类型声明
+├── bin/
+│   └── ibid                npm / Bun 全局安装的跨平台 CLI 启动器（优先调预编译二进制，回退至 bun src/cli.ts 或按需拉取）
+├── scripts/
+│   ├── package-release.ts  全平台单文件二进制交叉编译与 ZIP + SHASUMS256.txt 打包脚本
+│   └── postinstall.mjs     npm / Bun 安装钩子：零依赖下载解压对应平台的 Release 二进制
 ├── styles/                 随二进制打包的内置 CSL 样式（nature, gb7714, gb7714-2025）与 zh-CN 区域文件
-├── skills/ibid/            三层渐进式披露 Agent Skill（SKILL.md、references/ 按需参考手册、scripts/ensure-ibid.sh）
+├── skills/ibid/            渐进式披露 Agent Skill（SKILL.md 与 references/ 按需参考手册）
 ├── test/                   Bun 测试套件（7 个测试文件）与测试夹具（fixtures/）
 ├── docs/                   基于 @cloudflare/nimbus-docs (Astro) 的人类与 Agent 文档站
+├── install.sh              macOS / Linux 一键安装脚本（对标 Bun install.sh，默认装入 ~/.local/bin/ibid）
+├── install.ps1             Windows PowerShell 一键安装脚本（默认装入 ~/.local/bin/ibid.exe）
 ├── package.json
 └── tsconfig.json
 ```

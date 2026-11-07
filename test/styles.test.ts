@@ -1,8 +1,8 @@
 import { BunServices } from "@effect/platform-bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { Effect, Exit, Layer, Option, Schema } from "effect"
+import { Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http"
-import { TestConsole } from "effect/testing"
+import { TestClock, TestConsole } from "effect/testing"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -112,6 +112,16 @@ describe("--style resolution", () => {
     expect(message).toStartWith("style offline-style: cannot fetch from the CSL repository (")
     expect(message).toEndWith(") and no cached copy")
     expect(message).not.toContain("\n")
+
+    const stalled = Layer.succeed(HttpClient.HttpClient)(HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(new ReadableStream({ start() {} }), { status: 200 })))
+    ))
+    const timedOut = await Effect.runPromise(Effect.gen(function*() {
+      const fiber = yield* resolveStyle("stalled-style").pipe(Effect.provide(Layer.mergeAll(BunServices.layer, stalled)), Effect.forkChild)
+      yield* TestClock.adjust("21 seconds")
+      return yield* Fiber.await(fiber)
+    }).pipe(Effect.provide(TestClock.layer())))
+    expect(failure(timedOut)).toBe("style stalled-style: cannot fetch from the CSL repository (no response within 20 s) and no cached copy")
   })
 
   test("a path to a local .csl file; built-in names stay built in", async () => {

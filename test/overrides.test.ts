@@ -264,6 +264,12 @@ describe("verify input", () => {
     expect(f?.tag).toBe("UserError")
     expect(f?.message).toContain("cannot read")
   })
+
+  test("a comment-only .bib file returns no findings", async () => {
+    const bib = join(dir, "comments.bib")
+    writeFileSync(bib, "% leading comment\n  % indented comment\n\n")
+    expect(await ok(verifyFile(bib))).toEqual([])
+  })
 })
 
 test("item files without overrides still load", async () => {

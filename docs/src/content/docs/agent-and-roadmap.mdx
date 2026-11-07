@@ -43,7 +43,9 @@ sidebar:
 
 ## 本地存储结构（File-first Artifacts）
 
-本地库目录（`.ibid/` 或 `~/.local/share/ibid/`）采用纯文本 JSON 存储，方便 Git 版本控制与 Agent 直接检视：
+本地库目录（`.ibid/` 或 `~/.local/share/ibid/`）采用纯文本 JSON 存储，方便 Git 版本控制与 Agent 直接检视。每个文件通过临时文件（`<path>.<pid>.tmp`）加原子 `rename` 写入，防止中断损坏。
+
+> **并发写入约束**：同一文献库的写入命令（`add`、`override`、`tag`、`untag`、`note`、`rm`、`col` 变更）应**串行执行**；目前不支持多个进程并发修改同一文献库。
 
 ```text
 .ibid/

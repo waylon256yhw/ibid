@@ -120,6 +120,21 @@ describe("checkNumbering", () => {
       citations: 0,
       findings: []
     })
+    // Without a References heading, a single numbered line is not treated as a reference list.
+    expect(checkNumbering("See [1].\n\n1. Introduction\n")).toMatchObject({ status: "no-list", entries: 0, citations: 0, findings: [] })
     expect(checkNumbering(doc("Arrays (Harris et al., 2020)."))).toMatchObject({ status: "no-citations", entries: 5, citations: 0, findings: [] })
+  })
+
+  test("a single-entry reference list under an explicit heading is checked", () => {
+    expect(kinds("See [2].\n\nReferences\n1. Only reference.\n")).toEqual([
+      ["missing-entry", [2], 1],
+      ["uncited", [1], 4]
+    ])
+    expect(checkNumbering("See [1].\n\nReferences\n1. Only reference.\n")).toMatchObject({
+      status: "checked",
+      entries: 1,
+      citations: 1,
+      findings: []
+    })
   })
 })

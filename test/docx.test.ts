@@ -62,8 +62,11 @@ describe("xmlToText", () => {
       expect(xmlToText(doc(body))).toBe("[link](https://doi.org/10.1038/nature14539)")
     })
     test("percent-encoded DOI targets", () => {
+      const encoded = new Map([["rId1", "https://doi.org/10.1038%2Fs41586-020-2649-2"]])
       const body = p(`<w:hyperlink r:id="rId1">${r("10.1038/s41586-020-2649-2")}</w:hyperlink>`)
-      expect(xmlToText(doc(body), new Map([["rId1", "https://doi.org/10.1038%2Fs41586-020-2649-2"]]))).toBe("10.1038/s41586-020-2649-2")
+      expect(xmlToText(doc(body), encoded)).toBe("10.1038/s41586-020-2649-2")
+      const hidden = p(`<w:hyperlink r:id="rId1">${r("Full text")}</w:hyperlink>`)
+      expect(xmlToText(doc(hidden), encoded)).toBe("[Full text](https://doi.org/10.1038/s41586-020-2649-2)")
     })
   })
 

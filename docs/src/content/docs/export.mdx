@@ -29,7 +29,7 @@ ibid export q4-deck --format dossier         # Markdown 证据速查表：序号
 | `text` | 纯文本参考文献列表，每行一条。 |
 | `html` | 自包含的 HTML 片段（带 `<meta charset="utf-8">`），保留斜体、粗体、上标、下标；非编号样式采用悬挂缩进，编号样式的序号放在固定宽度容器中对齐。在浏览器打开后复制或直接粘贴进 Word / Google Docs 可保留全部排版。 |
 | `rtf` | 完整的 RTF 文档：保存为 `.rtf` 可直接用 Word 打开；在 macOS 上通过 `\| pbcopy` 即可作为富文本写入剪贴板（以 `{\rtf1` 开头的输入会被系统剪贴板识别为富文本）。中文字符、弯引号、破折号等均以 `\uN` 转义保留；每条带 0.5 英寸悬挂缩进，编号样式的序号后带制表符 `\tab`。 |
-| `bibtex` | 中文字符原样保留。引用键（citation key）为稳定、唯一的纯 ASCII（如 `harris2020array`）：若作者名不含拉丁字母则生成 `ref<年份><6 位哈希>`；该哈希仅取决于条目自身的 DOI（无则 PMID，再无则标题），因此**增删其他条目绝不会改变已有条目的引用键**；若两个拉丁键发生碰撞，相撞条目各自拼上自身哈希。arXiv 预印本（DOI 为 `10.48550/arxiv.*` 且无期刊）自动补充 `journal = {arXiv preprint arXiv:<id>}`。 |
+| `bibtex` | 中文字符原样保留。引用键（citation key）为纯 ASCII（如 `harris2020array`）：若作者名不含拉丁字母则生成 `ref<年份><6 位哈希>`；若两个拉丁键发生 `<姓><年份><首词>` 基础键碰撞，相撞条目各自追加自身 6 位短哈希（仅取决于条目自身的 DOI、PMID 或标题，与导出顺序无关）。**注意**：新增或删除发生基础键碰撞的条目会使相关条目的引用键在短键与带哈希键之间切换；重新导出后，需要同步更新稿件中的 `\cite{...}` 引用。arXiv 预印本（DOI 为 `10.48550/arxiv.*` 且无期刊）自动补充 `journal = {arXiv preprint arXiv:<id>}`。 |
 | `csl-json` | 输出应用本地更正后的标准 CSL-JSON 数组（每项带本地主键 `id`；手工条目带 `"custom": {"ibid-manual": true}`）。 |
 | `dossier` | Markdown 矩阵速查表，包含 `序号 \| 作者年份 \| 标题 \| 备注 \| 链接` 五列。备注列自动合并集合条目的 `section`、`context` 与条目自身的 `evidences` 笔记，方便做 PPT 或写综述时对照。 |
 

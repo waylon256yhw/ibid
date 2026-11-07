@@ -50,7 +50,7 @@ ibid verify manuscript.docx
 - **多样式排版与文稿反查（Export & Audit）**
   进程内集成 `@citation-js/core`，内置 `vancouver`（默认）、`apa`、`harvard`、`nature`、`gb7714`、`gb7714-2025`（自动处理中英混排的“等”与“et al.”），并支持按需从 CSL 官方仓库下载并缓存任意期刊样式；`verify` 支持直接读取 `.bib`、`.md` 与 `.docx` 文件，逐条核对元数据及 `[1]`、`[3–5]` 正文引用编号。
 - **人类与 Agent 双模 CLI（Unix & Agent Ergonomics）**
-  默认输出适合终端阅读与管道组合的紧凑 Tab 分隔行；传入 `--json` 时严格在 `stdout` 输出单个结构化 JSON 值，失败时 `stderr` 静默并以退出码 `1` 结束。
+  默认输出适合终端阅读与管道组合的紧凑 Tab 分隔行；传入 `--json` 时（除命令行参数语法错误仍输出标准 CLI 帮助与错误信息外）严格在 `stdout` 输出单个结构化 JSON 值，失败时 `stderr` 静默并以退出码 `1` 结束。对同一文献库的写入命令应串行执行。
 
 ---
 

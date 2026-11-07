@@ -35,7 +35,17 @@ describe("parseId", () => {
     expect(ok("pmc:5938574")).toEqual({ scheme: "pmc", pmc: "5938574" })
   })
   test("rejects junk before any network call", () => {
-    for (const s of ["foo:bar", "pmid:12a", "pmc:PMCx", "doi:11.1/x", "arxiv:nope", "https://example.com/10.1/x", "Attention is all you need"]) {
+    for (const s of [
+      "foo:bar",
+      "pmid:12a",
+      "pmc:PMCx",
+      "doi:11.1/x",
+      "arxiv:nope",
+      "https://example.com/10.1/x",
+      "https://doi.org/10.1234/%zz",
+      "https://doi.org/10.1000/100%",
+      "Attention is all you need"
+    ]) {
       expect(errorTag(Effect.runSyncExit(parseId(s)))).toBe("InvalidIdentifierError")
     }
   })
@@ -391,7 +401,7 @@ describe("export rendering", () => {
     expect(md).toBe("1. Vaswani, A. *et al.* Array programming with *NumPy* & friends. *Nature* **585**, 357–362 (2020).")
   })
 
-  test("BibTeX keeps Chinese text; keys are ASCII, unique and do not depend on the rest of the list", async () => {
+  test("BibTeX keeps Chinese text; keys are ASCII, unique and disambiguated by item hash regardless of list order", async () => {
     const zh2: Csl = { ...zh, title: "另一篇", DOI: "10.3969/x" }
     const zhKey = citationKeys([zh])[0]!
     expect(zhKey).toMatch(/^ref2011[0-9a-f]{6}$/)
@@ -702,15 +712,24 @@ describe("CLI contracts", () => {
     expect(errorTag(Effect.runSyncExit(checkTitles(["a", "b"], ["A"])))).toBe("UserError")
   })
 
-  test("a registry that never answers times out as an UpstreamError", async () => {
+  test("a registry that never answers or stalls mid-body times out as an UpstreamError", async () => {
     const hang = Layer.succeed(HttpClient.HttpClient)(HttpClient.make(() => Effect.never))
-    const exit = await Effect.runPromise(Effect.gen(function*() {
-      const fiber = yield* parseId("doi:10.1234/slow").pipe(Effect.flatMap(fetchCsl), Effect.provide(hang), Effect.forkChild)
-      yield* TestClock.adjust("21 seconds")
-      return yield* Fiber.await(fiber)
-    }).pipe(Effect.provide(TestClock.layer())))
-    expect(errorTag(exit)).toBe("UpstreamError")
-    expect(Exit.isFailure(exit) && Option.getOrUndefined(Exit.findErrorOption(exit))?.message).toContain("no response within 20 s")
+    const stalledBody = Layer.succeed(HttpClient.HttpClient)(HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response(new ReadableStream({ start() {} }), { status: 200 })))
+    ))
+    for (const effect of [
+      parseId("doi:10.1234/slow").pipe(Effect.flatMap(fetchCsl), Effect.provide(hang)),
+      parseId("doi:10.1234/stalled").pipe(Effect.flatMap(fetchCsl), Effect.provide(stalledBody)),
+      findCandidates("stalled search").pipe(Effect.provide(stalledBody))
+    ]) {
+      const exit = await Effect.runPromise(Effect.gen(function*() {
+        const fiber = yield* Effect.forkChild(effect)
+        yield* TestClock.adjust("21 seconds")
+        return yield* Fiber.await(fiber)
+      }).pipe(Effect.provide(TestClock.layer())))
+      expect(errorTag(exit)).toBe("UpstreamError")
+      expect(Exit.isFailure(exit) && Option.getOrUndefined(Exit.findErrorOption(exit))?.message).toContain("no response within 20 s")
+    }
   })
 })
 

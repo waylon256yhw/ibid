@@ -41,11 +41,11 @@ const show = (ns: ReadonlyArray<number>) => ns.length > 2 && ns[ns.length - 1]! 
  * text where an entry runs on until a blank line or the next item.
  *
  * Finding the list: list items form a run while each number is equal to the previous one or at most
- * `MAX_STEP` above it, whatever text lies between them. Of the runs with at least two items, the
- * reference list is the first one that starts after the last heading such as "References",
- * "Supplementary References" or "参考文献"; without such a heading (or no run after it), the longest
- * run, the later one on a tie. So protocol steps or numbered section headings before the list do not
- * count, nor does a shorter numbered list after it.
+ * `MAX_STEP` above it, whatever text lies between them. After the last heading such as "References",
+ * "Supplementary References" or "参考文献", the reference list is the first run of at least two items,
+ * or of one item when none is longer; without such a heading (or no run after it), the longest run of
+ * at least two items, the later one on a tie. So protocol steps or numbered section headings before
+ * the list do not count, nor does a shorter numbered list after it.
  *
  * Citations are the markers on every line that is not part of a list entry. A marker at the start of
  * a list item line is that item's number, not a citation. A bracket holding 0, or a single number of
@@ -65,7 +65,7 @@ export const checkNumbering = (text: string): NumberingResult => {
   }
   const candidates = runs.filter((r) => r.length >= 2)
   const heading = lines.findLastIndex((l) => HEADING.test(l))
-  const list = (heading >= 0 ? candidates.find((r) => r[0]!.line > heading) : undefined)
+  const list = (heading >= 0 ? candidates.find((r) => r[0]!.line > heading) ?? runs.find((r) => r[0]!.line > heading) : undefined)
     ?? candidates.reduce<typeof items | undefined>((a, b) => a && a.length > b.length ? a : b, undefined)
   const none = { entries: 0, citations: 0, findings: [] }
   if (!list) return { status: "no-list", message: "no numbered reference list found", ...none }

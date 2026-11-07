@@ -69,15 +69,19 @@ const isCsl = (text: string) => text.includes("http://purl.org/net/xbiblio/csl")
 /** The body of `url`, undefined on 404. */
 const download = Effect.fn("download")(function*(url: string) {
   const client = (yield* HttpClient.HttpClient).pipe(
-    HttpClient.mapRequest(HttpClientRequest.setHeaders({ "User-Agent": `ibid/${VERSION}` })),
-    HttpClient.timeout(`${TIMEOUT_SECONDS} seconds`)
+    HttpClient.mapRequest(HttpClientRequest.setHeaders({ "User-Agent": `ibid/${VERSION}` }))
   )
   const upstream = (message: string) => new UpstreamError({ url, message })
-  const res = yield* client.get(url).pipe(Effect.mapError((e) => upstream(httpFailure(e).message)))
+  const res = yield* Effect.gen(function*() {
+    const r = yield* client.get(url)
+    return { status: r.status, text: r.status === 200 ? yield* r.text : "" }
+  }).pipe(
+    Effect.timeout(`${TIMEOUT_SECONDS} seconds`),
+    Effect.mapError((e) => upstream(httpFailure(e).message))
+  )
   if (res.status === 404) return undefined
   if (res.status !== 200) return yield* upstream(`HTTP ${res.status}`)
-  const text = yield* res.text.pipe(Effect.mapError((e) => upstream(e.message)))
-  return isCsl(text) ? text : yield* upstream("not a CSL file")
+  return isCsl(res.text) ? res.text : yield* upstream("not a CSL file")
 })
 
 /** `<store>/styles/<file>` when cached, else the first of `urls` that exists, written to the cache. Undefined when none does. */
@@ -304,8 +308,8 @@ export const shortHash = (c: Csl) =>
 
 /**
  * `<family><year><first title word>` in ASCII. When the name has no Latin letters, or two entries
- * would share a key, `ref<year>` / that key plus `shortHash`, so a key never depends on what else
- * is exported.
+ * would share a key, `ref<year>` / that key plus `shortHash`: disambiguation depends on the entry
+ * itself rather than its position, though adding or removing a colliding entry changes both keys.
  */
 export const citationKeys = (csls: ReadonlyArray<Csl>) => {
   const bases = csls.map((c) => {

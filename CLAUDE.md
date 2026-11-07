@@ -69,6 +69,7 @@ cd docs && npm run build    # 构建静态 HTML 与面向 Agent 的 Markdown / l
 4. **File-first 存储与原子写入（[`src/store.ts`](./src/store.ts)）**
    - 库发现优先级：`IBID_DIR` 环境变量 $\rightarrow$ 从 `cwd` 向上查找最近的 `.ibid/` $\rightarrow$ `${XDG_DATA_HOME:-~/.local/share}/ibid`。
    - 所有落盘均通过 `writeJsonAtomic`（先写 `<path>.<pid>.tmp` 再 `rename`）完成。
+   - **并发写入限制**：`writeJsonAtomic` 保证单文件写入的原子性，但未引入跨进程文件锁。针对**同一文献库**的写入命令（`add`、`override`、`tag`、`untag`、`note`、`rm`、`col` 变更）应**串行执行**；不支持多个进程并发修改同一条目或集合。
    - 目前未启用 SQLite 索引：`findItem` 用 `doi:` 查找时直接读单文件；用 `pmid:` 或 `pmc:` 查找以 DOI 为主键的条目时会调用 `listItems()` 扫描全库（几百篇规模下开销极小）。
 
 ---
@@ -97,4 +98,5 @@ cd docs && npm run build    # 构建静态 HTML 与面向 Agent 的 Markdown / l
 - 带 `--json` 时，`stdout` 必须且只能输出**一个合法的 JSON 值**：
   - 单结果命令失败时，在 `stdout` 输出 `{"error": {"_tag": "...", "message": "...", ...}}`（用法错误的 `_tag` 为 `UsageError`），`stderr` 不输出任何内容，抛出静默的 `Reported` 错误使进程以退出码 `1` 结束。
   - 批量命令（`add`、`col add`、`rm`、`verify`）即使部分失败也正常在 `stdout` 输出完整结果数组（每项自带 `ok: false, error: ...` 或非 `OK` 状态），随后通过 `Reported` 以退出码 `1` 结束。
+  - **唯一例外**：命令行参数解析器在进入命令处理函数之前的语法错误（如缺少必填位置参数、未知的 `--flag` 或类型不合法的标志值）仍按标准 CLI 文本输出帮助信息。
 - 作者列表异常（0 人或超过 50 人，且未被 `override` 修正）在 `add` / `col add` 时作为 `warning` 提示（人类模式写 `stderr`，`--json` 模式放入该条结果的 `warnings` 数组），**不改变退出码**。

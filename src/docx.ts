@@ -130,7 +130,7 @@ export const xmlToText = (xml: string, rels = new Map<string, string>(), numberi
     // A link that spans paragraphs is left as it is.
     if (!doi || current() !== p) return
     const text = p.text.slice(at)
-    if (!text.toLowerCase().includes(doi.toLowerCase())) p.text = `${p.text.slice(0, at)}[${text}](${url})`
+    if (!text.toLowerCase().includes(doi.toLowerCase())) p.text = `${p.text.slice(0, at)}[${text}](https://doi.org/${doi})`
   }
   // ponytail: only numbering set on the paragraph itself; numbering inherited from a paragraph style
   // (styles.xml) and counters shared by lists of one abstract definition are not followed. Add both if a

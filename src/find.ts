@@ -76,8 +76,7 @@ export const searchWorks = Effect.fn("searchWorks")(function*(title: string, row
       while: (e) => HttpClient.isTransientError(e) && httpFailure(e).status !== 429,
       schedule: Schedule.exponential(200),
       times: 2
-    }),
-    HttpClient.timeout(`${TIMEOUT_SECONDS} seconds`)
+    })
   )
   const run = (how: { filter: string } | { search: string }) => client.get(URL, {
     urlParams: {
@@ -88,9 +87,10 @@ export const searchWorks = Effect.fn("searchWorks")(function*(title: string, row
     }
   }).pipe(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(Works)),
+    Effect.timeout(`${TIMEOUT_SECONDS} seconds`),
     Effect.map((res) => res.results),
     Effect.mapError((e) => {
-      const { message, status } = e._tag === "HttpClientError" ? httpFailure(e) : { message: e.message, status: undefined }
+      const { message, status } = e._tag === "HttpClientError" || e._tag === "TimeoutError" ? httpFailure(e) : { message: e.message, status: undefined }
       if (status === 429) {
         return new UpstreamRateLimitError({
           url: URL,

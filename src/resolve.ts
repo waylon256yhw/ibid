@@ -49,7 +49,12 @@ export const parseId = (raw: string): Effect.Effect<Ref, InvalidIdentifierError>
     case "http":
     case "https": {
       const m = /^https?:\/\/(?:dx\.)?doi\.org\/(.+)$/i.exec(input)
-      return m ? doi(decodeURIComponent(m[1]!)) : invalid("only https://doi.org/ URLs are accepted")
+      if (!m) return invalid("only https://doi.org/ URLs are accepted")
+      try {
+        return doi(decodeURIComponent(m[1]!))
+      } catch {
+        return invalid("malformed percent-encoding in DOI URL")
+      }
     }
   }
   return input.startsWith("10.") ? doi(input) : invalid("expected doi:, pmid:, pmc:, arxiv:, a bare 10.x DOI or a https://doi.org/ URL")
@@ -289,10 +294,12 @@ const decodeRaw = Schema.decodeUnknownEffect(RawCsl)
 export const TIMEOUT_SECONDS = 20
 
 /** `HTTP <status>`, a timeout, or the transport error's own message. */
-export const httpFailure = (e: HttpClientError.HttpClientError) =>
-  e.reason._tag === "StatusCodeError"
+export const httpFailure = (e: HttpClientError.HttpClientError | Cause.TimeoutError) =>
+  Cause.isTimeoutError(e) || (e.reason._tag !== "StatusCodeError" && Cause.isTimeoutError(e.reason.cause))
+    ? { status: undefined, message: `no response within ${TIMEOUT_SECONDS} s` }
+    : e.reason._tag === "StatusCodeError"
     ? { status: e.reason.response.status, message: `HTTP ${e.reason.response.status}` }
-    : { message: Cause.isTimeoutError(e.reason.cause) ? `no response within ${TIMEOUT_SECONDS} s` : e.message }
+    : { status: undefined, message: e.message }
 
 const ctxp = (kind: string, id: string) => `https://pmc.ncbi.nlm.nih.gov/api/ctxp/v1/${kind}/?format=csl&id=${id}`
 
@@ -307,11 +314,11 @@ export const fetchCsl = Effect.fn("fetchCsl")(function*(ref: Ref) {
   const client = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest(HttpClientRequest.setHeaders({ Accept: accept, "User-Agent": USER_AGENT })),
     HttpClient.filterStatusOk,
-    HttpClient.retryTransient({ schedule: Schedule.exponential(200), times: 2 }),
-    HttpClient.timeout(`${TIMEOUT_SECONDS} seconds`)
+    HttpClient.retryTransient({ schedule: Schedule.exponential(200), times: 2 })
   )
   const body = yield* client.get(url).pipe(
     Effect.flatMap((res) => res.text),
+    Effect.timeout(`${TIMEOUT_SECONDS} seconds`),
     Effect.mapError((e) => {
       const { message, status } = httpFailure(e)
       if (status === 404) return new IdentifierNotFoundError({ id: label, message: `${label}: not found at ${source}` })

@@ -428,6 +428,7 @@ export const verifyFile = Effect.fn("verifyFile")(function*(path: string) {
     )
     : yield* fs.readFileString(path).pipe(Effect.mapError(unreadable))
   if (!lower.endsWith(".bib")) return [...yield* verifyText(text), ...numberingFindings(text)]
+  if (text.replace(/^\s*%.*$/gm, "").trim() === "") return []
   const { Cite } = yield* Effect.promise(citeLib)
   const entries = yield* Effect.try({
     try: () => new Cite(text).data as Array<BibEntry>,

@@ -15,6 +15,9 @@
 ```bash
 bun install
 bun run build   # 编译为 dist/ibid 单文件可执行程序；开发时也可直接 bun src/cli.ts <命令>
+
+# 可选：将渐进式披露 Agent Skill 软链到全局 Agent 技能目录，使 Agent 在任意工作区自动调用 ibid
+ln -s "$PWD/skills/ibid" ~/.claude/skills/ibid
 ```
 
 从检索、防伪入库、归集到导出与文稿反查的典型工作流：

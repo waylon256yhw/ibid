@@ -29,6 +29,7 @@ ibid/
 │   ├── docx.ts             零外部依赖的 `.docx`（ZIP + WordprocessingML）文本提取器（段落、修订、域代码、DOI 超链接、自动编号、脚注/尾注）
 │   └── text.d.ts           `.csl` 与 `.xml` 文本导入的 TypeScript 类型声明
 ├── styles/                 随二进制打包的内置 CSL 样式（nature, gb7714, gb7714-2025）与 zh-CN 区域文件
+├── skills/ibid/            三层渐进式披露 Agent Skill（SKILL.md、references/ 按需参考手册、scripts/ensure-ibid.sh）
 ├── test/                   Bun 测试套件（7 个测试文件）与测试夹具（fixtures/）
 ├── docs/                   基于 @cloudflare/nimbus-docs (Astro) 的人类与 Agent 文档站
 ├── package.json

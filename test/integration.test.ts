@@ -2,7 +2,7 @@ import { BunServices } from "@effect/platform-bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { Effect, Exit, Layer } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/http"
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import crossref from "./fixtures/crossref-numpy.json" with { type: "json" }
@@ -101,5 +101,31 @@ describe("title with a label before it", () => {
     const exit = run(`Expert consensus document: ${title}`, title)
     expect(Exit.isSuccess(exit) && exit.value.titleMatch).toBe("FUZZY_MATCH")
     expect(Exit.isFailure(run("Note: Biology", "Biology"))).toBe(true)
+  })
+})
+
+describe("skills/ibid progressive-disclosure skill", () => {
+  const skillDir = join(import.meta.dir, "..", "skills", "ibid")
+
+  test("SKILL.md frontmatter and Tier 2 references are present and linked", () => {
+    const skill = readFileSync(join(skillDir, "SKILL.md"), "utf8")
+    expect(skill).toMatch(/^---\nname: ibid\ndescription: .+\n---\n/)
+    for (const rel of ["references/verify-remediation.md", "references/styles-and-overrides.md", "scripts/ensure-ibid.sh"]) {
+      expect(skill).toContain(rel)
+      expect(existsSync(join(skillDir, rel))).toBe(true)
+    }
+  })
+
+  test("ensure-ibid.sh resolves the repository binary even when invoked via a symlink", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "ibid-skill-"))
+    try {
+      const linked = join(tmp, "ibid")
+      symlinkSync(skillDir, linked)
+      const proc = Bun.spawnSync([join(linked, "scripts", "ensure-ibid.sh")], { cwd: tmp })
+      expect(proc.exitCode).toBe(0)
+      expect(proc.stdout.toString().trim()).toEndWith("/ibid")
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
   })
 })

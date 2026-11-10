@@ -1,15 +1,22 @@
-import { Effect, Exit, FileSystem } from "effect"
+import { Effect, Exit, FileSystem, Option } from "effect"
 import { arxivId, citeLib } from "./export.ts"
 import { docxText } from "./docx.ts"
 import { findCandidates } from "./find.ts"
 import { checkNumbering } from "./numbering.ts"
 import { checkTitle, fetchCsl, mainTitle, normalizeTitle, parseId, similarity, TITLE_FUZZY_THRESHOLD } from "./resolve.ts"
-import type { Csl } from "./schema.ts"
-import { effective, findItem, itemKey, keyOf, plain, year } from "./store.ts"
+import { contextRange, LIST_MARKER, NUMBERED, referenceEntries } from "./entries.ts"
+import { isManual, type Csl } from "./schema.ts"
+import { effective, findItem, itemKey, keyOf, manualId, manualText, readItem, plain, year } from "./store.ts"
 import { usage } from "./ui.ts"
 
+export { contextAt, NUMBERED } from "./entries.ts"
+
 export type Status = "OK" | "MISMATCH" | "NOT_FOUND" | "UNIDENTIFIED" | "CHECK" | "ERROR"
-export type Finding = { status: Status; location: string; id?: string; details: string }
+export type Finding = {
+  status: Status; location: string; id?: string; details: string
+  line?: number; entryNumber?: number; text?: string; referenceTitle?: string; itemId?: string
+  matchedBy?: "manual-text"
+}
 
 // ---------- identifiers in prose ----------
 
@@ -86,45 +93,6 @@ export const extractIds = (text: string): Array<Found> => {
   return out.map((f) => perContext.get(f.start) === 1 ? { ...f, near: f.context } : f)
 }
 
-/**
- * The marker of a numbered list item, with the number in group 1 or 2: `1. `, `1) `, `1．`, `1、`,
- * `1<tab>` (how textutil writes Word's numbered lists), `[1]`, `［1］`. The numbering check uses
- * the same pattern, so both agree on what a reference entry is.
- */
-export const NUMBERED = /^\s*(?:[[［](\d+)[\]］]\s*|(\d+)(?:[.)．]\s+|[、\t]\s*))(?=\S)/
-/** A numbered item or a bullet. */
-const LIST_MARKER = new RegExp(`${NUMBERED.source}|^\\s*[-*+•]\\s`)
-
-/**
- * The text an identifier on 1-based `line` belongs to: its table row, or its list item (marker line plus
- * continuation lines up to the next marker) when the line is in a list, else its
- * blank-line-separated paragraph.
- */
-export const contextAt = (text: string, line: number) => {
-  const lines = text.split("\n")
-  const [start, end] = contextRange(lines, line - 1)
-  return lines.slice(start, end + 1).join("\n")
-}
-
-/** First and last 0-based line of `contextAt`. */
-const contextRange = (lines: ReadonlyArray<string>, at: number) => {
-  // A Markdown table row is one entry on one line.
-  if (/^\s*\|/.test(lines[at]!)) return [at, at] as const
-  const blank = (i: number) => lines[i]!.trim() === ""
-  let start = at
-  let end = at
-  while (start > 0 && !blank(start - 1)) start--
-  while (end < lines.length - 1 && !blank(end + 1)) end++
-  let marker = at
-  while (marker >= start && !LIST_MARKER.test(lines[marker]!)) marker--
-  if (marker >= start) {
-    start = marker
-    end = at
-    while (end < lines.length - 1 && !blank(end + 1) && !LIST_MARKER.test(lines[end + 1]!)) end++
-  }
-  return [start, end] as const
-}
-
 /** 1 for an exact (normalized) occurrence, else the best `similarity` of a same-length window starting at a word. */
 export const titleScore = (title: string, text: string) => {
   const t = normalizeTitle(title)
@@ -192,7 +160,7 @@ export const missingDetails = (csl: Csl, entry: string) => {
 
 // ---------- .bib entries ----------
 
-type BibEntry = Partial<Csl> & { "citation-key"?: string; id?: string }
+type BibEntry = Partial<Csl> & { note?: string; "citation-key"?: string; id?: string }
 
 const num = (v: unknown) => v === undefined || v === null || String(v).trim() === "" ? undefined : String(v).trim().replace(/^0+(?=\d)/, "")
 /** A leading `e` before digits is an electronic locator: `e2301006` is page `2301006`. */
@@ -310,10 +278,24 @@ const lookup = (id: string, location: string, record = resolve(id)) =>
     )
   )
 
+const matchManual = Effect.fn("matchManual")(function*(text: string) {
+  const item = Option.getOrUndefined(yield* readItem(manualId(text)))
+  return item && isManual(item) && manualText(item.manual) === manualText(text) ? item : undefined
+})
+
+const manualFinding = (id: string, location: string, text: string): Finding => ({
+  status: "OK", location, text, id, itemId: id, matchedBy: "manual-text",
+  details: "matches locally registered manual text (not registry verified)"
+})
+
 const verifyBibEntry = Effect.fn("verifyBibEntry")(function*(e: BibEntry, raw: string) {
   const location = e["citation-key"] ?? e.id ?? "?"
   const id = bibIdentifier(e, raw)
   if (id === undefined) {
+    if (e.note && /^\s*@misc\b/i.test(raw)) {
+      const manual = yield* matchManual(e.note)
+      if (manual) return manualFinding(manual.id, location, e.note)
+    }
     if (!e.title) return { status: "UNIDENTIFIED", location, details: "no identifier and no title" } as Finding
     const details = yield* findCandidates(e.title, { rows: 5 }).pipe(
       Effect.map((cs) => {
@@ -328,7 +310,7 @@ const verifyBibEntry = Effect.fn("verifyBibEntry")(function*(e: BibEntry, raw: s
   }
   const r = yield* lookup(id, location)
   if ("finding" in r) return r.finding
-  return { location, id, ...judgeEntry(e, r.csl) } as Finding
+  return { location, id, referenceTitle: plain(r.csl.title), itemId: itemKey(r.csl, keyOf(yield* parseId(id))), ...judgeEntry(e, r.csl) } as Finding
 })
 
 const verifyText = Effect.fnUntraced(function*(text: string) {
@@ -364,43 +346,36 @@ const verifyText = Effect.fnUntraced(function*(text: string) {
         details: `neither the title nor first author and year found nearby; registry has "${plain(r.csl.title)}", ${firstFamily(r.csl) ?? "no author"}, ${year(r.csl) ?? "no year"}`
       }
   })
-  // In line order; findings on one line keep their reading order.
-  const unidentified = unidentifiedItems(text, found)
-  return [...checked.map((f, i) => [found[i]!.line, f] as const), ...unidentified.map((u) => [u.line, u.finding] as const)]
+  // Keep context metadata on both successful and failed lookups.
+  const structured = checked.map((finding, i): Finding => {
+    const f = found[i]!
+    const marker = NUMBERED.exec(f.context)
+    const r = looked[i]!
+    return { ...finding, line: f.start + 1, text: f.context.replace(LIST_MARKER, "").trim(),
+      ...(marker && { entryNumber: Number(marker[1] ?? marker[2]) }),
+      ...("csl" in r && { referenceTitle: plain(r.csl.title), itemId: itemKey(r.csl, f.key) }) }
+
+  })
+  const unidentified = yield* Effect.forEach(unidentifiedItems(text, found), Effect.fnUntraced(function*(u) {
+    const manual = yield* matchManual(u.finding.text!)
+    return manual ? { ...u, finding: { ...u.finding, ...manualFinding(manual.id, u.finding.location, u.finding.text!) } } : u
+  }), { concurrency: 16 })
+  return [...structured.map((f, i) => [found[i]!.line, f] as const), ...unidentified.map((u) => [u.line, u.finding] as const)]
     .sort((a, b) => a[0] - b[0])
     .map(([, f]) => f)
 })
 
-/**
- * List items with no identifier, in a block of consecutive list items (blank lines between items allowed,
- * any other paragraph ends the block) where most items have one: likely references nobody can check.
- */
+/** Identifier-less entries in the same bibliography blocks used for structured verification. */
 export const unidentifiedItems = (text: string, found: ReadonlyArray<Found>) => {
-  const lines = text.split("\n")
   const withId = new Set(found.map((f) => f.start))
-  const blocks: Array<Array<number>> = [[]]
-  let inItem = false
-  lines.forEach((l, i) => {
-    if (LIST_MARKER.test(l)) {
-      blocks.at(-1)!.push(i)
-      inItem = true
-    } else if (l.trim() === "") inItem = false
-    else if (!inItem && blocks.at(-1)!.length) blocks.push([])
-  })
-  return blocks
-    .filter((b) => b.filter((i) => withId.has(i)).length * 2 > b.length)
-    .flatMap((b) => b.filter((i) => !withId.has(i)))
-    .map((i) => {
-      const excerpt = lines[i]!.replace(LIST_MARKER, "").trim()
-      return {
-        line: i + 1,
-        finding: {
-          status: "UNIDENTIFIED",
-          location: `line ${i + 1}`,
-          details: `no identifier: ${excerpt.length > 60 ? `${excerpt.slice(0, 60)}…` : excerpt}`
-        } as Finding
-      }
-    })
+  return referenceEntries(text, withId).filter((e) => !withId.has(e.line - 1)).map((e) => ({
+    line: e.line,
+    finding: {
+      status: "UNIDENTIFIED", location: `line ${e.line}`, line: e.line,
+      ...(e.entryNumber !== undefined && { entryNumber: e.entryNumber }), text: e.text,
+      details: `no identifier: ${e.text.length > 60 ? `${e.text.slice(0, 60)}…` : e.text}`
+    } as Finding
+  }))
 }
 
 /**
@@ -411,7 +386,7 @@ export const numberingFindings = (text: string): Array<Finding> => {
   const n = checkNumbering(text)
   if (n.status !== "checked") return []
   return n.findings.length
-    ? n.findings.map((f) => ({ status: "CHECK", location: `line ${f.line}`, details: `numbering: ${f.message}` }))
+    ? n.findings.map((f) => ({ status: "CHECK", location: `line ${f.line}`, line: f.line, details: `numbering: ${f.message}` }))
     : [{ status: "OK", location: "numbering", details: n.message }]
 }
 
@@ -435,5 +410,8 @@ export const verifyFile = Effect.fn("verifyFile")(function*(path: string) {
     catch: (e) => usage(`${path}: cannot parse as BibTeX: ${e instanceof Error ? e.message : String(e)}`)
   })
   const blocks = rawBlocks(text)
-  return yield* Effect.forEach(entries, (e) => verifyBibEntry(e, blocks.get(e["citation-key"] ?? "") ?? ""), { concurrency: 3 })
+  return yield* Effect.forEach(entries, Effect.fnUntraced(function*(e) {
+    const raw = blocks.get(e["citation-key"] ?? "") ?? ""
+    return { text: raw.trim(), ...yield* verifyBibEntry(e, raw) }
+  }), { concurrency: 3 })
 })

@@ -1,5 +1,6 @@
 import { normalizeTitle, similarity } from "./resolve.ts"
-import { extractIds, NUMBERED } from "./verify.ts"
+import { extractIds } from "./verify.ts"
+import { NUMBERED, numberedReferences } from "./entries.ts"
 
 export type NumberingKind = "missing-entry" | "uncited" | "out-of-order" | "gap" | "repeated" | "duplicate"
 /** `line` is 1-based. */
@@ -16,13 +17,6 @@ export type NumberingResult = {
   findings: Array<NumberingFinding>
 }
 
-
-/** A heading line that introduces a reference list, optionally numbered or in Markdown. */
-const HEADING =
-  /^[#*\s]*(?:\d+[.)]?\s*)?(?:(?:supplementary|supporting)\s+)?(?:references?(?:\s+(?:list|cited|and\s+notes))?|bibliography|literature\s+cited|works\s+cited|参考文献|引用文献)[\s*:：]*$/i
-
-/** Largest step between consecutive item numbers that still continues a run (a gap of up to 9 entries). */
-const MAX_STEP = 10
 
 const DASH = /[-–—−~～－]/
 const SEP = /[,，、;；]/
@@ -53,30 +47,13 @@ const show = (ns: ReadonlyArray<number>) => ns.length > 2 && ns[ns.length - 1]! 
  */
 export const checkNumbering = (text: string): NumberingResult => {
   const lines = text.split("\n")
-  const items = lines.flatMap((l, i) => {
-    const m = NUMBERED.exec(l)
-    return m ? [{ n: Number(m[1] ?? m[2]), line: i }] : []
-  })
-  const runs: Array<typeof items> = []
-  for (const it of items) {
-    const last = runs[runs.length - 1]?.at(-1)
-    if (last && last.n <= it.n && it.n <= last.n + MAX_STEP) runs[runs.length - 1]!.push(it)
-    else runs.push([it])
-  }
-  const candidates = runs.filter((r) => r.length >= 2)
-  const heading = lines.findLastIndex((l) => HEADING.test(l))
-  const list = (heading >= 0 ? candidates.find((r) => r[0]!.line > heading) ?? runs.find((r) => r[0]!.line > heading) : undefined)
-    ?? candidates.reduce<typeof items | undefined>((a, b) => a && a.length > b.length ? a : b, undefined)
+  const list = numberedReferences(text)
   const none = { entries: 0, citations: 0, findings: [] }
-  if (!list) return { status: "no-list", message: "no numbered reference list found", ...none }
-
+  if (!list.length) return { status: "no-list", message: "no numbered reference list found", ...none }
   const inList = new Set<number>()
-  const entries = list.map((it, k) => {
-    const stop = list[k + 1]?.line ?? lines.length
-    let end = it.line + 1
-    while (end < stop && lines[end]!.trim() !== "") end++
-    for (let i = it.line; i < end; i++) inList.add(i)
-    return { n: it.n, line: it.line + 1, text: lines.slice(it.line, end).join(" ").replace(NUMBERED, "") }
+  const entries = list.map((entry) => {
+    for (let i = entry.line - 1; i < entry.endLine; i++) inList.add(i)
+    return { n: entry.entryNumber, line: entry.line, text: entry.text }
   })
 
   const cites: Array<{ n: number; line: number }> = []

@@ -27,6 +27,19 @@ ibid add doi:10.1038/s41586-020-2649-2 --json
   只要权威源返回的记录含有 `DOI`，本地落盘主键一律为 `doi:<小写 DOI>`（即使最初是按 `pmid:` 或 `pmc:` 抓取的），避免同一篇文献在库中产生重复文件。无 DOI 时主键为 `pmid:<n>`，再无则为 `pmc:<n>`。
 </Aside>
 
+### 显式选择 PubMed 元数据
+
+```bash
+ibid add doi:10.1098/rsif.2017.0387 --source pubmed \
+  --expect-title "Opportunities and obstacles for deep learning in biology and medicine"
+```
+
+`--source pubmed` 接受 DOI 或 PMID 输入，不能与 `--manual` 混用，也不接受 PMC 输入。对于 DOI，优先使用本地已知 PMID，否则通过 PubMed ESearch 查找；获取 PubMed 记录后，必须确认 DOI 一致并通过标题核验才写入。无结果、多结果歧义、返回 DOI 缺失或不符都会失败并保留旧记录，不静默回退。
+
+来源由每次调用决定：再次执行不带 `--source pubmed` 的 `add doi:...` 会从 `doi.org` 刷新。它不会自动合并各来源的作者、期刊或页码。
+
+成功的 `add`（包括 `--manual`）在人类模式输出八个 Tab 分隔字段：`created/updated`、`id`、`核验状态`、`年份`、`第一作者`、`标题`、`期刊`、`source 来源`。来源变化显示为 `source doi.org -> pubmed`，手工条目显示 `source manual`。`--json` 结果含 `action`，来源变化时另含 `previousSource`；当前来源见 `item.verification.source`。
+
 ### 标题防伪断言（`--expect-title`）
 
 - `--expect-title` 可重复：要么完全不传，要么按命令行中标识符的顺序**为每个标识符各传一次**（如 `ibid add A B --expect-title "标题A" --expect-title "标题B"`）；个数不符报用法错误。
@@ -45,11 +58,11 @@ ibid add doi:10.1038/s41586-020-2649-2 --json
 - **HTML 实体与行内标签清洗**：
   入库时所有文本字段解码命名与数字 HTML 实体（如 `&amp;` $\rightarrow$ `&`、`&#252;` $\rightarrow$ `ü`）。标记仅保留 citeproc 认识的 `<i>`、`<b>`、`<sub>`、`<sup>`（`<em>`、`<strong>` 以及 JATS 的 `<jats:italic>`、`<jats:bold>`、`<jats:sub>`、`<jats:sup>` 自动映射过去），其余标签剥离但保留内部文字；不构成标签的小于号（如 `p < 0.05`）原样保留。若注册库单独给出了 `subtitle` 且主标题中尚未包含，自动合并为 `标题: 副标题`。
 - **超时与并发**：
-  对注册库与 OpenAlex 的每次请求（含指数退避重试）限时 **20 秒**，超时报 `UpstreamError`。批量传入多个标识符时以最高 3 并发抓取、串行落盘；成功的照常写入，任一失败则最终退出码为 `1`。
+  对注册库与 OpenAlex 的每次请求（含指数退避重试）限时 **20 秒**，超时报 `UpstreamError`。批量传入多个标识符时以最高 3 并发抓取、串行落盘（显式 `--source pubmed` 批次串行抓取，ESearch 请求间隔至少 350ms）；成功的照常写入，任一失败则最终退出码为 `1`。
 - **重复 `add` 的幂等合并**：
   对已入库条目再次执行 `add` 会刷新权威元数据 `canonical`，但完整保留已有的 `evidences`、`tags`、本地更正 [`overrides`](/overrides-and-manual/) 以及 PubMed 给出的 `PMID` / `PMCID`；若刷新时未传 `--expect-title`，会自动沿用上次核验通过的预期标题重新与注册库标题核验，不会将 `VERIFIED` 降级为 `UNCHECKED`。
 - **异常作者列表告警**：
-  当注册库记录**没有作者**或**作者超过 50 人**（常见于将整个协作组成员全部列入的临床指南）时，`add` 与 `col add` 会逐条发出提示：人类模式下在 `stderr` 输出 `warning<Tab>输入<Tab>说明`（给出人数并建议用 `ibid override` 更正）；`--json` 模式下在该条结果的 `warnings` 数组中返回。提示不改变退出码；已用 `override` 更正过作者的条目不再提示。
+  当注册库记录**没有作者**时，`add` 与 `col add` 会逐条发出提示：人类模式下在 `stderr` 输出 `warning<Tab>输入<Tab>说明`（若作品确有作者，建议检查并用 `ibid override` 更正）；`--json` 模式下在该条结果的 `warnings` 数组中返回。提示不改变退出码；已用 `override` 更正过作者的条目不再提示。大型协作组的作者人数不触发告警，作者截断由导出样式决定。
 
 ---
 
@@ -67,5 +80,14 @@ ibid rm doi:10.1038/s41586-020-2649-2  # 被集合引用时拒绝并列出集合
 ```
 
 - **统一的标识符反查**：所有接受条目标识符的命令（`show`、`override`、`tag`、`untag`、`note`、`rm`、`col add`、`col rm`、`col move`）均支持 `doi:`、`pmid:`、`pmc:`、`arxiv:`、裸 DOI、doi.org 链接及 `manual:<hash>`。即使条目是以 `doi:` 为主键入库的，直接传其 `pmid:` 或 `pmc:` 也能在本地库中定位到它。
-- **`show` 的输出格式**：除了摘要行与基础字段外，还会展示 `language`、`tags`、每条 `evidence` 的文本，以及每一项 [`override`](/overrides-and-manual/) 与注册库原值的对照。当作者超过 10 人时，终端只显示前 10 人并后接 `… (N authors)`；月、日自动补零（如 `2023-05-16`）。`show --json`、`ls --json` 与 `export --format csl-json` 仍输出完整无截断的记录。
-- **沉淀阅读笔记（`note`）**：`ibid note <id> <text> [--source ...]` 会向条目的 `evidences` 数组追加一条带时间戳的笔记对象，已有的任何异构 `evidences` 条目均原样保留。
+- **`show` 的输出格式**：除了摘要行与基础字段外，还会展示 `language`、`tags`、权威元数据来源 `registry`、每条 `evidence [n]` 的索引与文本，以及每一项 [`override`](/overrides-and-manual/) 与注册库原值的对照。当作者超过 10 人时，终端只显示前 10 人并后接 `… (N authors)`；月、日自动补零（如 `2023-05-16`）。`show --json`、`ls --json` 与 `export --format csl-json` 仍输出完整无截断的记录。
+- **沉淀阅读笔记（`note`）**：`ibid note <id> <text> [--source ...]` 会向条目的 `evidences` 数组追加一条带时间戳的笔记对象，已有的任何异构 `evidences` 条目均原样保留。删除与清空用法如下，三种操作互斥，`--source` 仅用于追加；索引按完整数组计数（包含外部写入的非笔记对象），越界会报用法错误。
+
+```bash
+ibid show arxiv:1706.03762
+ibid note arxiv:1706.03762 --remove 2
+ibid note arxiv:1706.03762 --clear
+ibid note arxiv:1706.03762 --source "阅读记录" -- "- Markdown 项目符号笔记"
+```
+
+以 `-` 开头的笔记文本前加 `--`；所有命令选项应放在 `--` 之前。

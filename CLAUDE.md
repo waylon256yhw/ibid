@@ -25,6 +25,7 @@ ibid/
 │   ├── export.ts           懒加载 citation-js、CSL 样式解析与远程缓存、中英混排分组渲染、8 种导出格式（md/text/html/rtf/brief/bibtex/csl-json/dossier）与 PPT 短引文（brief/brief-num）
 │   ├── find.ts             OpenAlex 标题检索（title.search + search 回退）、相似度排序与作者姓氏过滤
 │   ├── verify.ts           `.bib`、Markdown/纯文本及 `.docx` 核验主流程（上下文切分、字段比对、缺失细节检查、未识别列表项检测）
+│   ├── entries.ts          列表条目与引用上下文的共享提取；显式参考文献标题与无标题列表判定
 │   ├── numbering.ts        正文数字引用（`[1]`, `[3–5]`）与编号参考文献列表的交叉核查（缺项、未引、乱序、断号、重号、重复文献）
 │   ├── docx.ts             零外部依赖的 `.docx`（ZIP + WordprocessingML）文本提取器（段落、修订、域代码、DOI 超链接、自动编号、脚注/尾注）
 │   └── text.d.ts           `.csl` 与 `.xml` 文本导入的 TypeScript 类型声明
@@ -35,7 +36,7 @@ ibid/
 │   └── postinstall.mjs     npm / Bun 安装钩子：零依赖下载解压对应平台的 Release 二进制
 ├── styles/                 随二进制打包的内置 CSL 样式（nature, gb7714, gb7714-2025）与 zh-CN 区域文件
 ├── skills/ibid/            渐进式披露 Agent Skill（SKILL.md 与 references/ 按需参考手册）
-├── test/                   Bun 测试套件（7 个测试文件）与测试夹具（fixtures/）
+├── test/                   Bun 测试套件与测试夹具（fixtures/）
 ├── docs/                   基于 @cloudflare/nimbus-docs (Astro) 的人类与 Agent 文档站
 ├── install.sh              macOS / Linux 一键安装脚本（对标 Bun install.sh，默认装入 ~/.local/bin/ibid）
 ├── install.ps1             Windows PowerShell 一键安装脚本（默认装入 ~/.local/bin/ibid.exe）
@@ -95,6 +96,9 @@ cd docs && npm run build    # 构建静态 HTML 与面向 Agent 的 Markdown / l
 - 所有导出、`ls`/`col show` 摘要、检索排序、以及 `verify` 读取本地条目时，一律通过 `effective(item)` 获取合并后的生效记录（若覆盖了 `issued` 则丢弃 `issued-online`；若覆盖了 `container-title` 则丢弃 `container-title-short`）。
 - 再次 `add` 同一条目刷新权威元数据时，必须保留原有的 `evidences`、`tags`、`overrides`、PubMed 的 `PMID`/`PMCID`，并在未传 `--expect-title` 时沿用上次的 `expectedTitle` 重新与 `canonical.title` 比对。
 
+- `upsertItem` 与 `addManual` 返回 `{ item, action: "created" | "updated" }`；来源变化时 `upsertItem` 还返回 `previousSource`。这些操作回执不写入条目文件。
+- `add --source pubmed` 对 DOI 优先使用本地 PMID，否则通过 PubMed ESearch 查询，再校验返回 DOI 完全一致并执行标题核验。查询歧义、缺失或不一致均拒绝替换，不回退到其他来源。每次 `add` 按本次参数选择来源，不保存来源偏好。
+
 ### 3. 入库归一化规则（[`normalizeCsl`](./src/resolve.ts)）
 - **日期优先级**：`issued` 优先取印刷日期（`published-print` $\rightarrow$ `journal-issue.published-print` $\rightarrow$ `journal-issue.published-online`），其次才取注册库的 `issued`（常为在线优先日期）。若在线优先年份与印刷年份不同，另存为非 CSL 字段 `issued-online`，`verify` 时两个年份均视为一致。
 - **页码回退**：没有 `page` 时以 `article-number` 作为 `page` 存储，确保各 CSL 样式均能输出文章编号。
@@ -107,4 +111,11 @@ cd docs && npm run build    # 构建静态 HTML 与面向 Agent 的 Markdown / l
   - 单结果命令失败时，在 `stdout` 输出 `{"error": {"_tag": "...", "message": "...", ...}}`（用法错误的 `_tag` 为 `UsageError`），`stderr` 不输出任何内容，抛出静默的 `Reported` 错误使进程以退出码 `1` 结束。
   - 批量命令（`add`、`col add`、`rm`、`verify`）即使部分失败也正常在 `stdout` 输出完整结果数组（每项自带 `ok: false, error: ...` 或非 `OK` 状态），随后通过 `Reported` 以退出码 `1` 结束。
   - **唯一例外**：命令行参数解析器在进入命令处理函数之前的语法错误（如缺少必填位置参数、未知的 `--flag` 或类型不合法的标志值）仍按标准 CLI 文本输出帮助信息。
-- 作者列表异常（0 人或超过 50 人，且未被 `override` 修正）在 `add` / `col add` 时作为 `warning` 提示（人类模式写 `stderr`，`--json` 模式放入该条结果的 `warnings` 数组），**不改变退出码**。
+- 作者列表为空（0 人，且未被 `override` 修正）在 `add` / `col add` 时作为 `warning` 提示（人类模式写 `stderr`，`--json` 模式放入该条结果的 `warnings` 数组），**不改变退出码**。
+
+### 5. 核验、导出与笔记约束
+- `entries.ts` 统一列表起止行、编号、完整续行文本。`UNIDENTIFIED` 检测对紧接显式参考文献标题的列表无标识符比例要求；无标题块仍须严格超过半数条目带标识符。不要复用编号检查的“最长编号列表”回退来判断未识别文献。
+- `verify --json` 的 `referenceTitle` 来自实际用于比对的生效记录，可能含 overrides；预期标题应取自原稿或独立选定的文献，不能把 `referenceTitle` 机械回填到 `--expect-title` 当作稿件核验。
+- manual 匹配复用 `manualText` / `manualId`，直接读对应文件后比较规范化文本；`.bib` 检查无标识符 `@misc` 的 `note`。`OK` + `matchedBy: "manual-text"` 只代表与本地登记文本一致。
+- `export --omit` 仅对 `md/text/html/rtf` 的生效记录副本删除指定标识符字段；其他格式拒绝该选项，manual 原文不变。BibTeX 手工文本转义须保持字面字符往返，避免再次转义生成的 TeX 命令。
+- `note --remove` 使用完整 `evidences` 数组的 1-based 索引，与 `show` 一一对应；追加、删除、清空互斥，`--source` 仅能搭配追加。

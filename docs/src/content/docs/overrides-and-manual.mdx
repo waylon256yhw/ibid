@@ -45,15 +45,17 @@ ibid add --manual "WHO. Global report on hypertension. Geneva: WHO; 2023."
 ```
 
 - `--manual` 可重复传入，也可在同一次 `ibid add` 命令中与普通标识符同时给出。
-- **确定性主键**：条目的 `id` 为 `manual:<规范化文本的 10 位 SHA-256 哈希>`（NFC 归一化并合并多余空白）。同一段文本重复添加会命中同一条目，并保留其已有的标签与 `evidences` 笔记。
+- **确定性主键**：条目的 `id` 为 `manual:<规范化文本的 10 位 SHA-256 哈希>`（NFC 归一化并合并多余空白）。同一段文本重复添加会命中同一条目，并保留其已有的标签与 `evidences` 笔记。首次添加返回 `action: "created"`，重复添加返回 `action: "updated"`。
 - **状态与集合编排**：手工条目的状态固定为 `MANUAL`，在集合中与普通条目完全一致地参与编排（支持 `col add <集合> manual:…`、`--at`、`col move`、`col rm`），因此集合序号 `[1]`、`[2]` 可与文稿的参考文献表完全对齐。
-- **限制**：对手工条目执行 `ibid override` 会报用法错误（如需修改文本，直接用新的文本执行 `add --manual`）；`verify` 不会核验手工条目。
+- **限制**：对手工条目执行 `ibid override` 会报用法错误（如需修改文本，直接用新的文本执行 `add --manual`）。
+
+`verify` 会对识别出的参考文献列表中的无标识符文本做本地精确匹配；去掉外层编号、归一化 NFC 与空白后须与已登记文本一致。命中返回 `OK`、`manual:<hash>` 和 `matchedBy: "manual-text"`。它表示本地确认，不是权威注册库核验；年份、页码或标点改变后不会模糊接受。无标题列表的检测范围见[核验规则](/verify-and-find/)。
 
 ### 手工条目在各导出格式中的表现
 
 | 导出格式 | 渲染行为 |
 | :--- | :--- |
 | `md` / `text` / `html` / `rtf` | 在其所在位置原样输出文本。**编号样式**（如 `vancouver`、`gb7714`、`nature`）中与相邻条目使用相同格式的序号（如 `2.`、`[2]`）；**非编号排序样式**（如 `apa`、`harvard`）默认将手工条目排在末尾并在 `stderr` 提示一行，传入 `--keep-order` 时则保持集合原位。 |
-| `bibtex` | 输出 `@misc{manual<哈希>, note = {<转义后的文本>}}`。 |
+| `bibtex` | 输出 `@misc{manual<哈希>, note = {<转义后的文本>}}`。`verify` 比对解析后的 `note`，不单凭引用键接受条目；反斜杠、波浪号等字面特殊字符在导出时转义。 |
 | `csl-json` | 输出 `{"id": "manual:…", "type": "document", "title": "<文本>", "custom": {"ibid-manual": true}}`。 |
 | `dossier` | Markdown 表格中“作者年份”一栏显示为 `(manual entry)`。 |

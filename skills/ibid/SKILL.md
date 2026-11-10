@@ -47,7 +47,7 @@ Store discovery order (`ibid where`):
   - Appending notes (`ibid note`), managing tags (`ibid tag` / `untag`), running `ibid verify`, and exporting requested formats (`ibid export`).
 - **Stop and ask the user before proceeding**:
   - When `ibid find` returns multiple plausible candidates or low title similarity (`< 0.90`);
-  - When `ibid add` fails with `TitleMismatchError` or emits `authorWarnings` (`0` authors or `> 50` consortium authors) before applying `ibid override`;
+  - When `ibid add` fails with `TitleMismatchError` or emits `authorWarnings` (`0` authors) before applying `ibid override`;
   - When `ibid verify` reports `UNIDENTIFIED` entries (choosing whether to search for an identifier, store as `--manual`, or remove) or numbering errors (`missing-entry`, `uncited`, `out-of-order`, `gap`, `repeated`, `duplicate`) that require editing the user's manuscript;
   - When deciding whether to initialize a project-local `.ibid/` store (`ibid init`) vs. using the global store.
 
@@ -59,16 +59,23 @@ Store discovery order (`ibid where`):
 
 ```bash
 # 1. Search OpenAlex by title (writes nothing to the store)
-# Output: <similarity>\t<doi|->\t<year|->\t<type|->\t<firstAuthor|->\t<title>
+# Output: <similarity>\t<doi|->\t<year|->\t<type|->\t<firstAuthor|->\t<title>\t<pmid|->
 ibid find "Array programming with NumPy" --author Harris
 
 # 2. Fetch, verify title against the authoritative registry, and lock into the store
-# Output: <id>\t<VERIFIED|FUZZY_MATCH|UNCHECKED|MANUAL>[*]\t<year>\t<firstAuthor>\t<title>\t<journal>
+# Output: <created|updated>\t<id>\t<VERIFIED|FUZZY_MATCH|UNCHECKED|MANUAL>[*]\t<year>\t<firstAuthor>\t<title>\t<journal>\tsource <source>
 ibid add doi:10.1038/s41586-020-2649-2 --expect-title "Array programming with NumPy"
 
 # 3. Attach reading notes or secondary evidence
 ibid note 10.1038/s41586-020-2649-2 "Defines the universal array protocol" --source "Slide 3 takeaway"
+# Put all options before -- when the text starts with a hyphen
+ibid note 10.1038/s41586-020-2649-2 --source "Reading" -- "- Markdown bullet"
+# Indices refer to the complete evidences array displayed by show
+ibid note 10.1038/s41586-020-2649-2 --remove 2
+ibid note 10.1038/s41586-020-2649-2 --clear
 ```
+
+For PubMed metadata selection, refresh semantics, or interpreting `add` actions, read the source-selection section in [`references/styles-and-overrides.md`](./references/styles-and-overrides.md).
 
 ### Loop 2 — Deliverable Curation & Export (`col` $\rightarrow$ `export` for Papers & Slide Decks)
 
@@ -89,6 +96,7 @@ ibid col sort q4-deck --by year --desc
 
 # Export full bibliography (built-in: vancouver, gb7714, gb7714-2025, nature, apa, harvard; or any CSL repo style name)
 ibid export q4-deck --style gb7714-2025
+ibid export q4-deck --style vancouver --omit pmid,pmcid    # Render without optional identifiers
 ibid export q4-deck --style nature --format rtf | pbcopy   # macOS: rich-text paste into Word / Pages / WPS
 
 # Export compact slide-footer citations (<Author>, *<Venue>*, <Year> in collection order)
@@ -109,6 +117,7 @@ ibid verify manuscript.docx
 ibid verify references.bib --json
 ```
 
+- For programmatic manuscript imports, read the structured-results rules in [`references/verify-remediation.md`](./references/verify-remediation.md); derive expected titles from the manuscript or independently selected works, not by copying `referenceTitle`.
 - When `ibid verify` reports non-`OK` findings (`MISMATCH`, `CHECK`, `NOT_FOUND`, `UNIDENTIFIED`, or `numbering:` issues), read [`references/verify-remediation.md`](./references/verify-remediation.md) for exact diagnostics and remediation steps.
 
 ### Loop 4 — Local Corrections & Identifier-less Works (`override` & `--manual`)

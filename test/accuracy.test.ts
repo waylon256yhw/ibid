@@ -182,7 +182,7 @@ describe("plain-text reference entries", () => {
       "- another bullet"
     ].join("\n")
     expect(unidentifiedItems(text, extractIds(text))).toEqual([
-      { line: 4, finding: { status: "UNIDENTIFIED", location: "line 4", details: "no identifier: B. Two, no identifier here." } }
+      { line: 4, finding: { status: "UNIDENTIFIED", location: "line 4", line: 4, entryNumber: 2, text: "B. Two, no identifier here.", details: "no identifier: B. Two, no identifier here." } }
     ])
   })
 

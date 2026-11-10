@@ -2,7 +2,7 @@
 
 ## 1. Export Formats (`--format`) & Styles (`--style`)
 
-`ibid export [collection] [--format <fmt>] [--style <style>] [--keep-order]` formats a collection (in collection order) or the entire store (sorted by first author, then year, with manual entries last).
+`ibid export [collection] [--format <fmt>] [--style <style>] [--keep-order] [--omit pmid,pmcid]` formats a collection (in collection order) or the entire store (sorted by first author, then year, with manual entries last).
 
 ### Formats (`--format`)
 
@@ -16,6 +16,10 @@
 | `bibtex` | UTF-8 BibTeX (Chinese characters preserved verbatim). |
 | `csl-json` | Effective CSL-JSON array (with `overrides` applied; manual entries carry `"custom": {"ibid-manual": true}`). |
 | `dossier` | Markdown table (`# \| Author, year \| Title \| Notes \| Link`) combining collection `section`, `context`, and item `evidences` notes. |
+
+### Identifier Omission (`--omit`)
+
+Accepts `doi`, `pmid`, `pmcid`, `url`, comma-separated or repeatable. Applies to copies of effective records for `md`, `text`, `html`, and `rtf` only. Other formats reject the option. Stored metadata and manual text remain unchanged. Omitting `doi` does not omit `url`; specify both when needed.
 
 ### Style Resolution (`--style`)
 
@@ -54,6 +58,19 @@
 
 ---
 
+## Metadata Source Selection and Refresh
+
+`find --json` includes a numeric-string `pmid` when OpenAlex provides one. To explicitly select PubMed metadata, use:
+
+```bash
+ibid add doi:10.1098/rsif.2017.0387 --source pubmed \
+  --expect-title "Opportunities and obstacles for deep learning in biology and medicine"
+```
+
+DOI inputs reuse a local PMID or query PubMed ESearch, then require the fetched DOI to match before title verification and writing. Zero/multiple search results or a missing/mismatched DOI fail without replacing the existing item. PMID inputs are also accepted; PMC inputs and `--manual` cannot be combined with `--source pubmed`.
+
+`add` refreshes according to each invocation: a later `add doi:...` without the flag fetches from `doi.org`. Existing overrides, tags, evidences, and PubMed IDs survive refresh. Successful results, including manual adds, have `action: "created" | "updated"`; source changes additionally expose `previousSource`. `show` displays the active registry source. Check existing overrides if a source refresh appears not to change rendered output.
+
 ## 2. Local Overrides (`ibid override`) vs. `canonical`
 
 `RegistryItem.canonical` stores the normalized authoritative record from the registry and is **never mutated by user edits**. `ibid override` writes to a sibling `overrides` object:
@@ -70,7 +87,7 @@
 | `--clear <field>` | (drops override) | Repeatable (`title`, `authors`, `year`, `journal`, `volume`, `issue`, `page`). |
 | `--clear-all` | (drops all) | Restores `effective(item)` to `canonical`. |
 
-- **Author Warnings**: When `canonical.author` has `0` or `> 50` authors and `overrides.author` is not set, `add` and `col add` emit a non-fatal warning suggesting `ibid override <id> --authors "..."`. Always ask the user before overriding authors.
+- **Author Warnings**: When `canonical.author` has `0` authors and `overrides.author` is not set, `add` and `col add` emit a non-fatal warning suggesting `ibid override <id> --authors "..."`. Always ask the user before overriding authors.
 
 ---
 
@@ -82,9 +99,11 @@ For works that genuinely have no DOI, PMID, PMCID, or arXiv ID (such as internal
 ibid add --manual "National Health Commission. Chinese Guidelines for Heart Failure 2024. Chin J Cardiol. 2024;52(3):235-275."
 ```
 
-- Stored under `manual:<10-hex-sha256-of-normalized-text>` (re-adding the same text is idempotent and preserves existing `tags` and `evidences`).
+- Stored under `manual:<10-hex-sha256-of-normalized-text>` (re-adding the same text is idempotent and preserves existing `tags` and `evidences`; returns `created` initially and `updated` on re-add).
 - Participates in `col add`, `col move`, `col rm`, `tag`, `note`, and `export`:
   - Numeric and `brief` styles print the manual text at its collection position with the surrounding numbering style;
   - Sorting styles (`apa`, `harvard`) place manual entries at the end unless `--keep-order` is passed;
   - `bibtex` exports `@misc{manual<hash>, note = {...}}`;
   - Cannot be modified with `ibid override` (re-add corrected text with `ibid add --manual` instead).
+
+- `verify` accepts exact normalized local manual text as `OK` with `matchedBy: "manual-text"`; this is local confirmation, not external registry verification. In `.bib`, it checks the decoded `note` of identifier-less `@misc` entries, not just their citation keys. Export escapes literal TeX special characters so the text survives parsing.

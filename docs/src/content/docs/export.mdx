@@ -42,6 +42,17 @@ ibid export q4-deck --format dossier         # Markdown 证据速查表：序号
 
 ---
 
+## 隐藏可选标识符（`--omit`）
+
+```bash
+ibid export manuscript --style vancouver --omit pmid,pmcid
+ibid export manuscript --format rtf --omit doi,pmid --omit pmcid,url
+```
+
+接受小写字段名 `doi`、`pmid`、`pmcid`、`url`，可逗号分隔或重复传入。仅支持 `md`、`text`、`html`、`rtf`；与 `brief`、`bibtex`、`csl-json`、`dossier` 格式组合会报用法错误。
+
+仅在本次排版前从生效记录副本删除指定字段，本地记录与 overrides 不变，manual 文本仍原样输出。`--omit doi` 不会连带删除 `URL`；若也不希望显示网址，请同时指定 `url`。
+
 ## 引文样式解析（`--style`）
 
 `--style`（作用于 `md`、`text`、`html`、`rtf` 四种列表格式，以及 `--format brief` 下的 `brief-num`）按以下顺序解析：

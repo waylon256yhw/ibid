@@ -89,7 +89,7 @@ describe("overrides", () => {
   })
 
   test("survive a re-add, which still checks the registry title", async () => {
-    const again = await ok(upsertItem(NUMPY, fetched({ ...numpy, volume: "999" })))
+    const again = (await ok(upsertItem(NUMPY, fetched({ ...numpy, volume: "999" })))).item
     expect(again.canonical.volume).toBe("999")
     expect(again.overrides?.author).toEqual([{ family: "Doe", given: "Jane" }])
     expect(again.verification.titleMatch).toBe("VERIFIED")
@@ -141,23 +141,23 @@ describe("abnormal author lists and output size", () => {
     tags: []
   })
 
-  test("warn on no authors and on more than 50, not when overridden", () => {
+  test("warn only on missing authors, not large teams or overridden authors", () => {
     expect(authorWarnings(item(undefined))[0]).toContain("no authors")
-    expect(authorWarnings(item(many(51)))[0]).toContain("lists 51 authors")
-    expect(authorWarnings(item(many(51)))[0]).toContain("ibid override doi:10.1/x --authors")
+    expect(authorWarnings(item(many(51)))).toEqual([])
+    expect(authorWarnings(item(many(2284)))).toEqual([])
     expect(authorWarnings(item(many(50)))).toEqual([])
     expect(authorWarnings({ ...item(many(300)), overrides: { author: [{ literal: "Group" }] } })).toEqual([])
   })
 
   test("warnings go to stderr in human mode and into the result under --json; the exit code is unchanged", async () => {
-    const results = withWarnings([{ input: "10.1/x", ok: true as const, item: item(many(335)) }])
+    const results = withWarnings([{ input: "10.1/x", ok: true as const, item: item(undefined) }])
     const human = await withConsole(report(results, false, () => "ok line"))
     expect(Exit.isSuccess(human.exit)).toBe(true)
     expect(human.out).toEqual(["ok line"])
-    expect(human.err).toEqual([`warning\t10.1/x\t${authorWarnings(item(many(335)))[0]}`])
+    expect(human.err).toEqual([`warning\t10.1/x\t${authorWarnings(item(undefined))[0]}`])
     const json = await withConsole(report(results, true, () => ""))
     expect(Exit.isSuccess(json.exit)).toBe(true)
-    expect(JSON.parse(json.out[0]!)[0].warnings).toEqual([expect.stringContaining("335 authors")])
+    expect(JSON.parse(json.out[0]!)[0].warnings).toEqual([expect.stringContaining("no authors")])
   })
 
   test("show: at most 10 authors, then the count; zero-padded dates", () => {
@@ -186,11 +186,11 @@ describe("abnormal author lists and output size", () => {
 
 describe("manual entries", () => {
   test("the id depends only on the normalized text; re-adding keeps tags", async () => {
-    const a = await ok(addManual(TEXT))
+    const { item: a } = await ok(addManual(TEXT))
     expect(a.id).toMatch(/^manual:[0-9a-f]{10}$/)
     expect(a.id).toBe(manualId(`  ${TEXT.replace(/ /g, "\n ")} `))
     await ok(writeItem({ ...a, tags: ["grey"] }))
-    const b = await ok(addManual(`${TEXT}  `))
+    const { item: b } = await ok(addManual(`${TEXT}  `))
     expect(b).toEqual({ id: a.id, manual: TEXT, evidences: [], tags: ["grey"] })
     expect(line(b).split("\t")).toEqual([a.id, "MANUAL", "-", "-", TEXT, "-"])
     expect(showLines(b)).toContain(`  text: ${TEXT}`)
@@ -243,7 +243,7 @@ describe("manual entries", () => {
   })
 
   test("escaping: RTF non-ASCII and BibTeX specials", async () => {
-    const odd = await ok(addManual("Zhang S. 指南 {draft} 50% & more_x"))
+    const { item: odd } = await ok(addManual("Zhang S. 指南 {draft} 50% & more_x"))
     const rows = [{ item: odd as Item }]
     expect(await render(rows, "rtf", "vancouver")).toContain("\\uc0\\u25351{}\\uc0\\u21335{} \\{draft\\}")
     expect(await render(rows, "bibtex", "vancouver")).toContain("note = {Zhang S. 指南 \\{draft\\} 50\\% \\& more\\_x}")
@@ -253,8 +253,8 @@ describe("manual entries", () => {
 describe("find text output", () => {
   test("has a type column after the year", () => {
     expect(findLine({ similarity: 1, doi: "10.1/a", year: 2001, type: "review", firstAuthor: "A B", title: "T", openalex: "W1" }))
-      .toBe("1\tdoi:10.1/a\t2001\treview\tA B\tT")
-    expect(findLine({ similarity: 0.5, title: "T", openalex: "W2" })).toBe("0.5\t-\t-\t-\t-\tT")
+      .toBe("1\tdoi:10.1/a\t2001\treview\tA B\tT\t-")
+    expect(findLine({ similarity: 0.5, title: "T", openalex: "W2" })).toBe("0.5\t-\t-\t-\t-\tT\t-")
   })
 })
 

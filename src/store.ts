@@ -172,7 +172,7 @@ export const upsertItem = Effect.fn("upsertItem")(function*(id: string, { canoni
   const old = found && !isManual(found) ? found : undefined
   const title = yield* checkTitle(expectTitle ?? old?.verification.expectedTitle, canonical.title)
   const { PMCID, PMID } = old?.canonical ?? {}
-  return yield* writeItem<RegistryItem>({
+  const item = yield* writeItem<RegistryItem>({
     id,
     canonical: { ...canonical, ...(PMID && !canonical.PMID ? { PMID } : {}), ...(PMCID && !canonical.PMCID ? { PMCID } : {}) },
     verification: { ...verification, ...title },
@@ -180,6 +180,8 @@ export const upsertItem = Effect.fn("upsertItem")(function*(id: string, { canoni
     evidences: found?.evidences ?? [],
     tags: found?.tags ?? []
   })
+  return { item, action: old ? "updated" as const : "created" as const,
+    ...(old && old.verification.source !== verification.source && { previousSource: old.verification.source }) }
 })
 
 // ---------- manual entries ----------
@@ -201,7 +203,8 @@ export const addManual = Effect.fn("addManual")(function*(input: string) {
   if (!text) return yield* new InvalidIdentifierError({ input, message: "--manual needs the reference text" })
   const id = manualId(text)
   const old = Option.getOrUndefined(yield* readItem(id))
-  return yield* writeItem<ManualItem>({ id, manual: text, evidences: old?.evidences ?? [], tags: old?.tags ?? [] })
+  const item = yield* writeItem<ManualItem>({ id, manual: text, evidences: old?.evidences ?? [], tags: old?.tags ?? [] })
+  return { item, action: old ? "updated" as const : "created" as const }
 })
 
 // ---------- overrides ----------

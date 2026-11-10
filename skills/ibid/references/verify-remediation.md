@@ -8,14 +8,27 @@
 
 | Status | Meaning | Action / Remediation |
 | :--- | :--- | :--- |
-| `OK` | All claimed fields match the effective record, required locators are present, and citation numbering is clean. | None required. |
+| `OK` | No actionable issue in this check. For `matchedBy: "manual-text"`, the text matches a locally registered manual entry; it is not registry verified. | None required. |
 | `MISMATCH` | A claimed field in a `.bib` entry contradicts the registry record (`title`, `year`, first `author` family name, `journal`, `volume`, `issue`, or first `page`). | Inspect the registry value reported in `details`. Fix the manuscript/`.bib` entry, or—if the registry metadata itself is faulty—store the item and run `ibid override <id> --<field> "<value>"`. |
 | `CHECK` | Non-contradictory anomaly requiring review:<ul><li>**In `.md` / `.docx` prose**: neither the title nor `<firstAuthor> + <year>` appears near the identifier;</li><li>**In `.md` / `.docx` reference entries**: title matches, but the entry text omits the registry's `year`, `volume`, or `page`/`article-number`;</li><li>**In `.bib`**: entry claims a field absent from the registry, or lacks `title`, `author`, or `year`;</li><li>**In `numbering:`**: citation numbering issue (`missing-entry`, `uncited`, `out-of-order`, `gap`, `repeated`, `duplicate`).</li></ul> | Supply the missing locator in the reference entry, fix the swapped identifier in prose, or resolve the numbering issue (see Section 3). |
 | `NOT_FOUND` | The identifier (`doi:`, `pmid:`, `pmc:`, `arxiv:`) returns HTTP 404 or an empty record from the authoritative registry. | The identifier is likely hallucinated or has a typo. Search the intended work with `ibid find "<title>" --author <surname>`, pause to confirm with the user, and replace the broken ID. |
-| `UNIDENTIFIED` |<ul><li>**In `.md` / `.docx`**: a list item without an identifier inside a reference list block where $>50\%$ of items have identifiers;</li><li>**In `.bib`**: an entry without `doi`, `pmid`, or `eprint`/`arXiv` ID (`verify` automatically queries OpenAlex by title and reports the best match if similarity $\ge 0.90$).</li></ul> | If `details` suggests a matching `doi:...` ($\ge 0.90$), verify and add it with `ibid add <doi> --expect-title "<title>"`. If the work genuinely has no identifier (e.g., a government report or legacy book), ask the user whether to record it via `ibid add --manual "<text>"`. |
+| `UNIDENTIFIED` |<ul><li>**In `.md` / `.docx`**: an identifier-less item not matching local manual text, in a block immediately after a reference heading or an unheaded block where strictly more than half the items have identifiers;</li><li>**In `.bib`**: an entry without `doi`, `pmid`, or `eprint`/`arXiv` ID that does not match local manual text (`@misc` uses its decoded `note`); if a title exists, `verify` queries OpenAlex and reports the best match when similarity $\ge 0.90$.</li></ul> | If `details` suggests a matching `doi:...` ($\ge 0.90$), verify and add it with `ibid add <doi> --expect-title "<title>"`. If the work genuinely has no identifier (e.g., a government report or legacy book), ask the user whether to record it via `ibid add --manual "<text>"`. |
 | `ERROR` | Network failure, rate limit (`HTTP 429`), or upstream timeout (`> 20 s`). | Retry after network recovery, or set `OPENALEX_API_KEY` if OpenAlex daily budget is exhausted. |
 
 ---
+
+## Structured Results for Scripts and Imports
+
+Keep `details` for display; use optional structured fields when available:
+
+- `line`: 1-based entry start line (or the problem line for numbering findings).
+- `entryNumber`: original numbered-list marker. Combine with `line` because separate lists may restart numbering.
+- `text`: full entry including continuation lines, with its outer list marker removed. For BibTeX it is normally the raw block; a manual match returns the decoded `note` text.
+- `referenceTitle`: the actual comparison title, including local overrides when present.
+- `itemId`: normalized store primary key; deduplicate DOI/PMID findings for the same work with it.
+- `matchedBy: "manual-text"`: exact match against a local manual record using NFC and collapsed whitespace. No fuzzy acceptance of changed punctuation, years or pages.
+
+Derive `--expect-title` from the manuscript or an independently selected work. Passing `referenceTitle` back to the same identifier only checks the registry against itself. Inspect all findings for an entry before importing it; keep unidentified entries pending explicit review rather than automatically accepting them as manual.
 
 ## 2. How `.docx`, Markdown, and `.bib` Inputs Are Parsed
 
@@ -43,7 +56,7 @@
 
 When a `.md` or `.docx` file contains both a numbered reference list (`1. `, `1) `, `[1] `, `［1］`, `1、`, or Word tab-numbered `\t1\t`) and in-text numeric citation markers (`[1]`, `[3, 4]`, `[5–7]`, `［1，2］`), `ibid verify` cross-checks them:
 
-- **List Detection**: After an explicit heading (`References`, `Supplementary References`, `Bibliography`, `Literature Cited`, `Works Cited`, `参考文献`, `引用文献`), even a 1-entry numbered list is checked. Without a heading, `ibid` selects the longest numbered run of $\ge 2$ items so numbered section headings or protocol steps are ignored.
+- **List Detection**: After an explicit heading (`References`, `Supplementary References`, `Bibliography`, `Literature Cited`, `Works Cited`, `参考文献`, `引用文献`), even a 1-entry numbered list is checked. Without a heading, `ibid` selects the longest numbered run of $\ge 2$ items as a heuristic. Without numeric citation markers, the numbering check emits no findings. This longest-run fallback is not used to classify `UNIDENTIFIED` items.
 - **Six Finding Kinds**:
   1. `missing-entry`: `[n] is cited but the reference list has no entry n`
   2. `uncited`: `entry n is never cited`

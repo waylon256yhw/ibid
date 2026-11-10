@@ -1,7 +1,7 @@
-import { Console, Data, Effect, Predicate, Runtime } from "effect"
+import { Console, Data, Effect, Option, Predicate, Runtime } from "effect"
 import { CliError, Flag } from "effect/cli"
-import { fetchCsl, parseId } from "./resolve.ts"
-import { type Csl, type IbidError, isManual, type Item, type Overrides, type RegistryItem } from "./schema.ts"
+import { fetchCsl, parseId, pubmedIdForDoi } from "./resolve.ts"
+import { type Csl, type IbidError, isManual, type Item, type Overrides, type RegistryItem, InvalidIdentifierError, UpstreamError } from "./schema.ts"
 import {
   authorName,
   withOverrides,
@@ -14,6 +14,7 @@ import {
   OVERRIDE_FIELDS,
   type OverrideField,
   plain,
+  readItem,
   upsertItem,
   year
 } from "./store.ts"
@@ -73,7 +74,7 @@ export const overrideLines = (item: RegistryItem) =>
 
 /** Human `show`: the summary line, the effective record's fields, then each override beside the registry value. */
 export const showLines = (item: Item) => {
-  const notes: Array<readonly [string, string | undefined]> = [["tags", item.tags.join(", ")], ...item.evidences.map((e) => ["evidence", evidenceText(e)] as const)]
+  const notes: Array<readonly [string, string | undefined]> = [["tags", item.tags.join(", ")], ...item.evidences.map((e, i) => [`evidence [${i + 1}]`, evidenceText(e) || "(empty)"] as const)]
   const field = ([k, v]: readonly [string, string | undefined]) => v ? [`  ${k}: ${v}`] : []
   if (isManual(item)) return [line(item), ...[["text", item.manual] as const, ["source", "manual entry, not from a registry"] as const, ...notes].flatMap(field)]
   const c = effective(item)
@@ -87,6 +88,7 @@ export const showLines = (item: Item) => {
     ["DOI", c.DOI],
     ["PMID", c.PMID],
     ["PMCID", c.PMCID],
+    ["registry", v.source],
     ["verified", `${v.titleMatch}${v.similarity !== undefined ? ` (${v.similarity})` : ""} via ${v.url} at ${v.fetchedAt}`],
     ["sha256", v.sha256],
     ...notes
@@ -94,15 +96,12 @@ export const showLines = (item: Item) => {
   return [line(item), ...rows.flatMap(field), ...overrideLines(item)]
 }
 
-export const MAX_AUTHORS = 50
-
-/** A registry author list that is empty or implausibly long, unless the authors are overridden. */
+/** A registry author list that is empty, unless the authors are overridden. */
 export const authorWarnings = (item: Item): Array<string> => {
   if (isManual(item) || item.overrides?.author) return []
   const n = item.canonical.author?.length ?? 0
   const fix = `ibid override ${item.id} --authors "Family, Given; ..."`
   if (n === 0) return [`the registry record has no authors; if the work has any, set them with ${fix}`]
-  if (n > MAX_AUTHORS) return [`the registry record lists ${n} authors; check them against the byline and correct them with ${fix}`]
   return []
 }
 
@@ -121,13 +120,28 @@ export const usage = (message: string) => new CliError.UserError({ cause: "usage
 
 // ---------- per-id results, shared by `add`, `col add`, `rm` ----------
 
+type StoredResult = { item: RegistryItem; action: "created" | "updated"; previousSource?: RegistryItem["verification"]["source"] }
+
 export type Result<A> = { input: string; ok: true } & A | { input: string; ok: false; error: IbidError }
 
 const notOk = (input: string) => (error: IbidError) => Effect.succeed({ input, ok: false as const, error } as Result<never>)
 
-const fetchOne = Effect.fn("fetchOne")(function*(input: string) {
+const fetchOne = Effect.fn("fetchOne")(function*(input: string, source?: "pubmed") {
   const ref = yield* parseId(input)
-  const fetched = yield* fetchCsl(ref)
+  if (source === "pubmed" && ref.scheme === "pmc") {
+    return yield* new InvalidIdentifierError({ input, message: "--source pubmed accepts DOI or PMID inputs" })
+  }
+  let target = ref
+  if (source === "pubmed" && ref.scheme === "doi") {
+    const old = Option.getOrUndefined(yield* readItem(keyOf(ref)))
+    const pmid = old && !isManual(old) ? old.canonical.PMID : undefined
+    target = { scheme: "pmid", pmid: pmid ?? (yield* pubmedIdForDoi(ref.doi)) }
+  }
+  const fetched = yield* fetchCsl(target)
+  if (source === "pubmed" && ref.scheme === "doi" && fetched.canonical.DOI !== ref.doi) {
+    return yield* new UpstreamError({ url: fetched.verification.url,
+      message: `PubMed DOI ${fetched.canonical.DOI ?? "(missing)"} does not match requested DOI ${ref.doi}` })
+  }
   return { id: itemKey(fetched.canonical, keyOf(ref)), fetched }
 })
 
@@ -142,16 +156,16 @@ export const checkTitles = (ids: ReadonlyArray<string>, titles: ReadonlyArray<st
  * one at a time, so two inputs that resolve to the same paper merge instead of racing.
  * `expectTitles[i]` is checked against `ids[i]`.
  */
-export const fetchAndStore = Effect.fn("fetchAndStore")(function*(ids: ReadonlyArray<string>, expectTitles?: ReadonlyArray<string>) {
+export const fetchAndStore = Effect.fn("fetchAndStore")(function*(ids: ReadonlyArray<string>, expectTitles?: ReadonlyArray<string>, source?: "pubmed") {
   const fetched = yield* Effect.forEach(ids, (input) =>
-    fetchOne(input).pipe(
+    fetchOne(input, source).pipe(
       Effect.map((f) => ({ input, ok: true as const, ...f })),
       Effect.catch(notOk(input))
-    ), { concurrency: 3 })
+    ), { concurrency: source === "pubmed" ? 1 : 3 })
   return yield* Effect.forEach(fetched, Effect.fnUntraced(function*(f, i) {
-    if (!f.ok) return f as Result<{ item: Item }>
+    if (!f.ok) return f as Result<StoredResult>
     return yield* upsertItem(f.id, f.fetched, expectTitles?.[i]).pipe(
-      Effect.map((item): Result<{ item: Item }> => ({ input: f.input, ok: true, item })),
+      Effect.map((stored): Result<StoredResult> => ({ input: f.input, ok: true, ...stored })),
       Effect.catch(notOk(f.input))
     )
   }))

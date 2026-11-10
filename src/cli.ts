@@ -5,7 +5,7 @@ import { Argument, Command, Flag } from "effect/cli"
 import { FetchHttpClient } from "effect/http"
 import { col } from "./col.ts"
 import { deleteItem } from "./collections.ts"
-import { exportRows, FORMATS, isList, render, resolveStyle, sortsEntries, STYLES } from "./export.ts"
+import { exportRows, FORMATS, isList, type OmitField, render, resolveStyle, sortsEntries, STYLES } from "./export.ts"
 import { findCandidates, findLine } from "./find.ts"
 import { VERSION } from "./resolve.ts"
 import { isManual, type Overrides } from "./schema.ts"
@@ -50,12 +50,18 @@ const add = Command.make("add", {
     Flag.atLeast(0)
   ),
   expectTitle,
+  source: Flag.Literals("source", ["pubmed"]).pipe(Flag.withDescription("Fetch DOI or PMID inputs from PubMed; DOI inputs are resolved and cross-checked"), Flag.optional),
   json
-}, handle(Effect.fn(function*({ expectTitle, ids, json, manual }) {
+}, handle(Effect.fn(function*({ expectTitle, ids, json, manual, source }) {
   if (ids.length === 0 && manual.length === 0) return yield* usage("give at least one identifier or --manual text")
-  const fetched = yield* fetchAndStore(ids, yield* checkTitles(ids, expectTitle))
-  const manuals = yield* tryEach(manual, (text) => addManual(text).pipe(Effect.map((item) => ({ item }))))
-  yield* report(withWarnings([...fetched, ...manuals]), json, (r) => line(r.item))
+  if (Option.isSome(source) && manual.length) return yield* usage("--source cannot be combined with --manual")
+  const fetched = yield* fetchAndStore(ids, yield* checkTitles(ids, expectTitle), Option.getOrUndefined(source))
+  const manuals = yield* tryEach(manual, addManual)
+  yield* report(withWarnings([...fetched, ...manuals]), json, (r) => {
+    const update = `${r.action}\t`
+    const source = !isManual(r.item) ? `\tsource ${"previousSource" in r ? `${r.previousSource} -> ` : ""}${r.item.verification.source}` : "\tsource manual"
+    return `${update}${line(r.item)}${source}`
+  })
 }))).pipe(Command.withDescription("Fetch, verify and store items by identifier, or store reference text with --manual"))
 
 const show = Command.make("show", { id: idArg, json }, handle(Effect.fn(function*({ id, json }) {
@@ -143,13 +149,24 @@ const untag = retag("untag", (tags, given) => tags.filter((t) => !given.includes
 
 const note = Command.make("note", {
   id: idArg,
-  text: Argument.String("text").pipe(Argument.withDescription("The note")),
+  text: Argument.String("text").pipe(Argument.withDescription("The note; use -- before text starting with a hyphen"), Argument.optional),
+  remove: Flag.Int("remove").pipe(Flag.withDescription("Remove an evidence by its 1-based show index"), Flag.optional),
+  clear: Flag.Boolean("clear").pipe(Flag.withDescription("Clear all evidences"), Flag.withDefault(false)),
   source: Flag.String("source").pipe(Flag.withDescription("Where the note comes from"), Flag.optional),
   json
-}, handle(Effect.fn(function*({ id, json, source, text }) {
-  const saved = yield* addNote(yield* findItem(id), text, Option.getOrUndefined(source))
+}, handle(Effect.fn(function*({ id, json, source, text, remove, clear }) {
+  if (Number(Option.isSome(text)) + Number(Option.isSome(remove)) + Number(clear) !== 1) {
+    return yield* usage("give note text, --remove <index>, or --clear (exactly one)")
+  }
+  if (Option.isSome(source) && Option.isNone(text)) return yield* usage("--source requires note text")
+  const item = yield* findItem(id)
+  const index = Option.getOrUndefined(remove)
+  if (index !== undefined && (index < 1 || index > item.evidences.length)) return yield* usage(`--remove must be between 1 and ${item.evidences.length}`)
+  const saved = Option.isSome(text)
+    ? yield* addNote(item, text.value, Option.getOrUndefined(source))
+    : yield* writeItem({ ...item, evidences: clear ? [] : item.evidences.filter((_, i) => i !== index! - 1) })
   yield* json ? printJson(saved) : Console.log(`${saved.id}\t${saved.evidences.length} evidence(s)`)
-}))).pipe(Command.withDescription("Append a note to an item's evidences"))
+}))).pipe(Command.withDescription("Append, remove or clear evidences; use -- before note text starting with a hyphen"))
 
 const init = Command.make("init", { json }, handle(Effect.fn(function*({ json }) {
   const fs = yield* FileSystem.FileSystem
@@ -172,11 +189,15 @@ const exportCmd = Command.make("export", {
     Flag.withDescription(`${Object.keys(STYLES).join(", ")}, a path to a .csl file, or any style name from the CSL repository (fetched once, cached in the store); md, text, html and rtf only (or brief-num with --format brief)`),
     Flag.withDefault("vancouver")
   ),
+  omit: Flag.String("omit").pipe(Flag.withDescription("Omit doi,pmid,pmcid,url from md/text/html/rtf (comma-separated or repeatable)"), Flag.atLeast(0)),
   keepOrder: Flag.Boolean("keep-order").pipe(
     Flag.withDescription("Keep collection order in a non-numeric style instead of the style's sort (numeric and brief styles always keep it)"),
     Flag.withDefault(false)
   )
-}, handle(Effect.fn(function*({ format, keepOrder, name, style }) {
+}, handle(Effect.fn(function*({ format, keepOrder, name, style, omit }) {
+  const omitted = omit.flatMap((value) => value.split(",").map((v) => v.trim()))
+  if (omitted.some((field) => !["doi", "pmid", "pmcid", "url"].includes(field))) return yield* usage("--omit accepts doi,pmid,pmcid,url")
+  if (omitted.length && !isList(format)) return yield* usage("--omit supports only md, text, html and rtf")
   const rows = yield* exportRows(Option.getOrUndefined(name))
   const resolved = isList(format) ? yield* resolveStyle(style) : style === "brief-num" ? "brief-num" : "vancouver"
   const manual = rows.filter((r) => isManual(r.item)).length
@@ -184,7 +205,7 @@ const exportCmd = Command.make("export", {
     yield* Console.error(`note: ${style} sorts its entries; ${manual} manual entr${manual === 1 ? "y is" : "ies are"} listed last (--keep-order keeps collection order)`)
   }
   const out = yield* Effect.tryPromise({
-    try: () => render(rows, format, resolved, keepOrder),
+    try: () => render(rows, format, resolved, keepOrder, omitted as Array<OmitField>),
     catch: (e) => usage(`cannot render with style ${style}: ${e instanceof Error ? e.message : String(e)}`)
   })
   yield* Console.log(out)

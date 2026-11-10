@@ -41,9 +41,9 @@ describe("verify on Word files and citation numbering", () => {
     copyFileSync(`${import.meta.dir}/fixtures/features.docx`, path)
     const found = await findings(path)
     // Paragraph 4 is entry 1 (its DOI sits in a hyperlink), paragraph 7 a footnote citing another DOI.
-    expect(found.map((f) => [f.status, f.location])).toEqual([["CHECK", "line 4"], ["CHECK", "line 7"], ["CHECK", "line 5"]])
+    expect(found.map((f) => [f.status, f.location])).toEqual([["CHECK", "line 4"], ["UNIDENTIFIED", "line 5"], ["CHECK", "line 7"], ["CHECK", "line 5"]])
     expect(found[0]!.details).toContain("volume 585")
-    expect(found[2]!.details).toBe("numbering: entry 2 is never cited")
+    expect(found[3]!.details).toBe("numbering: entry 2 is never cited")
   })
 
   test("clean numbering is one OK line; text without markers adds nothing", async () => {
@@ -51,7 +51,7 @@ describe("verify on Word files and citation numbering", () => {
     const cited = join(dir, "cited.md")
     writeFileSync(cited, `Arrays [1] and more arrays [2].\n\nReferences\n1. ${entry}\n2. ${entry.replace("doi:", "https://doi.org/")}\n`)
     const found = await findings(cited)
-    expect(found.at(-1)).toEqual({ status: "CHECK", location: "line 5", details: "numbering: entries 1, 2 are the same work (same identifier)" })
+    expect(found.at(-1)).toEqual({ status: "CHECK", location: "line 5", line: 5, details: "numbering: entries 1, 2 are the same work (same identifier)" })
 
     const clean = join(dir, "clean.md")
     writeFileSync(clean, `Arrays [1] and other things [2].\n\nReferences\n1. ${entry}\n2. Somebody. Another paper. J Things. 2019;1:1-2.\n`)
@@ -133,6 +133,6 @@ describe("skills/ibid progressive-disclosure skill & distribution", () => {
   test("bin/ibid launcher executes and reports the package version", () => {
     const proc = Bun.spawnSync([join(rootDir, "bin", "ibid"), "--version"], { cwd: rootDir })
     expect(proc.exitCode).toBe(0)
-    expect(proc.stdout.toString().trim()).toBe("ibid v0.1.0")
+    expect(proc.stdout.toString().trim()).toBe("ibid v0.2.0")
   })
 })

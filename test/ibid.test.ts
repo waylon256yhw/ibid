@@ -186,7 +186,7 @@ describe("store", () => {
     const onDisk = JSON.parse(readFileSync(path, "utf8"))
     writeFileSync(path, JSON.stringify({ ...onDisk, evidences: [evidence] }))
 
-    const item = await ok(upsertItem(id, fetched({ ...canonical, volume: "999" }, "t2")))
+    const item = (await ok(upsertItem(id, fetched({ ...canonical, volume: "999" }, "t2")))).item
     expect(item.evidences).toEqual([evidence])
     expect(item.canonical.volume).toBe("999")
     expect(item.verification.fetchedAt).toBe("t2")
@@ -201,10 +201,10 @@ describe("store", () => {
     const id = itemKey(fromPubmed, "x")
     const path = join(dir, "items", fileName(id))
 
-    expect((await ok(upsertItem(id, fetched(fromPubmed, "t1"), pubmed.title))).verification.titleMatch).toBe("VERIFIED")
+    expect(((await ok(upsertItem(id, fetched(fromPubmed, "t1"), pubmed.title))).item).verification.titleMatch).toBe("VERIFIED")
 
     // Same paper refreshed from doi.org, no --expect-title this time.
-    const again = await ok(upsertItem(id, fetched(fromDoiOrg, "t2")))
+    const again = (await ok(upsertItem(id, fetched(fromDoiOrg, "t2")))).item
     expect(again.verification).toMatchObject({ fetchedAt: "t2", titleMatch: "VERIFIED", expectedTitle: pubmed.title })
     expect(again.canonical.PMID).toBe("29618526")
     expect(again.canonical.PMCID).toBe("PMC5938574")
@@ -264,9 +264,9 @@ describe("library", () => {
   })
 
   test("tags are sorted, unique and survive a re-add", async () => {
-    const item = await ok(upsertItem(ids.numpy, fetched(numpy, "t1")))
+    const item = (await ok(upsertItem(ids.numpy, fetched(numpy, "t1")))).item
     expect((await ok(writeItem({ ...item, tags: ["zeta", "alpha", "zeta"] }))).tags).toEqual(["alpha", "zeta"])
-    expect((await ok(upsertItem(ids.numpy, fetched(numpy, "t2")))).tags).toEqual(["alpha", "zeta"])
+    expect(((await ok(upsertItem(ids.numpy, fetched(numpy, "t2")))).item).tags).toEqual(["alpha", "zeta"])
   })
 
   test("note appends and keeps foreign evidence entries verbatim", async () => {
@@ -669,7 +669,7 @@ describe("find and verify with a stubbed HttpClient", () => {
     const md = join(dir, "draft.md")
     writeFileSync(md, "Claimed in doi:10.1038/missing.\n")
     const findings = await ok(Effect.provide(verifyFile(md), stub(404, "nope")))
-    expect(findings).toEqual([{ status: "NOT_FOUND", location: "line 1", id: "doi:10.1038/missing", details: "doi:10.1038/missing: not found at doi.org" }])
+    expect(findings).toEqual([{ status: "NOT_FOUND", location: "line 1", line: 1, text: "Claimed in doi:10.1038/missing.", id: "doi:10.1038/missing", details: "doi:10.1038/missing: not found at doi.org" }])
   })
 
   test("verify: a DOI followed by the PMID of the same work shares the text before the DOI", async () => {

@@ -401,7 +401,10 @@ const arxivJournal = (c: Csl) => {
 /** The arXiv id of a record registered under arXiv's DataCite prefix. */
 export const arxivId = (c: Csl) => /^10\.48550\/arxiv\.(.+)$/i.exec(c.DOI ?? "")?.[1]
 
-const escapeBibtex = (s: string) => s.replace(/\\/g, "\\textbackslash{}").replace(/[{}%&#_$]/g, "\\$&")
+// One pass: braces introduced by TeX commands must not be escaped again.
+const escapeBibtex = (s: string) => s.replace(/[\\{}%&#_$~^]/g, (c) =>
+  c === "\\" ? "\\textbackslash{}" : c === "~" ? "\\textasciitilde{}" : c === "^" ? "\\textasciicircum{}" : `\\${c}`)
+
 
 /** A manual entry as `@misc` with the text in `note`; the key is its id without the colon. */
 const manualBibtex = (text: string) => `@misc{${manualId(text).replace(":", "")},\n\tnote = {${escapeBibtex(text)}}\n}`
@@ -473,9 +476,18 @@ export const exportRows = Effect.fn("exportRows")(function*(name: string | undef
   })
 })
 
-/** Every format renders the effective record (overrides applied); a manual entry is its text. */
-export const render = (rows: ReadonlyArray<Row>, format: Format, style: Style | CslStyle, keepOrder = false): Promise<string> => {
-  const csls = rows.map(({ item }) => isManual(item) ? item.manual : effective(item))
+export type OmitField = "doi" | "pmid" | "pmcid" | "url"
+const OMIT_FIELDS = { doi: "DOI", pmid: "PMID", pmcid: "PMCID", url: "URL" } as const
+
+/** Every format renders the effective record; identifier omission affects bibliography copies only. */
+export const render = (rows: ReadonlyArray<Row>, format: Format, style: Style | CslStyle, keepOrder = false, omit: ReadonlyArray<OmitField> = []): Promise<string> => {
+  if (omit.length && !isList(format)) return Promise.reject(new Error("--omit supports only md, text, html and rtf"))
+  const csls = rows.map(({ item }) => {
+    if (isManual(item)) return item.manual
+    const csl = { ...effective(item) }
+    for (const field of omit) delete csl[OMIT_FIELDS[field]]
+    return csl
+  })
   switch (format) {
     case "md":
     case "text":

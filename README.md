@@ -49,6 +49,7 @@ ibid col add q4-deck pmid:29618526 arxiv:1706.03762 10.1038/s41586-020-2649-2 --
 
 # 4. 导出参考文献表（支持 md / text / html / rtf / brief / bibtex / csl-json / dossier）
 ibid export q4-deck --style gb7714
+ibid export q4-deck --style vancouver --omit pmid,pmcid # 隐藏可选标识符，不修改存储
 ibid export q4-deck --format brief          # 组会/演讲 PPT 页脚短引文：Harris et al., *Nature*, 2020
 ibid export q4-deck --format rtf | pbcopy   # macOS：以富文本复制，直接粘贴进 Word / Pages / WPS
 
@@ -57,6 +58,8 @@ ibid verify manuscript.docx
 ```
 
 ---
+
+重复 `add` 会刷新元数据，并报告 `created` / `updated`；需要 PubMed 元数据时，可显式使用 `ibid add doi:... --source pubmed --expect-title "原稿标题"`。`verify --json` 返回完整条目文本及结构化比对字段；已登记的 manual 文本精确匹配后可通过核验，表示本地确认，并非权威源证实。
 
 ## 工作原理（How it works）
 
@@ -75,16 +78,16 @@ ibid verify manuscript.docx
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `ibid add <id...> [--expect-title ...] [--manual ...]` | 抓取、核验并入库文献，或用 `--manual` 录入无标识符文献 |
+| `ibid add <id...> [--expect-title ...] [--manual ...] [--source pubmed]` | 抓取、核验并入库文献，或用 `--manual` 录入无标识符文献 |
 | `ibid ls [query...] [--tag <tag>]` | 多词检索或按标签过滤本地文献库 |
 | `ibid show <id>` | 查看单篇条目的完整元数据、核验回执、笔记与本地修正对照 |
 | `ibid override <id> [--title/--authors/--year/...]` | 本地修正指定字段（保留注册库原始 `canonical` 记录不变） |
 | `ibid tag <id> <tag...>` / `ibid untag <id> <tag...>` | 为条目添加或移除标签 |
-| `ibid note <id> <text> [--source ...]` | 向条目的 `evidences` 追加阅读笔记或二手调研结论 |
+| `ibid note <id> [text] [--remove <index> \| --clear]` | 追加阅读笔记，或按 `show` 的索引删除、清空 `evidences` |
 | `ibid rm <id...> [--force]` | 删除本地条目（被集合引用时需 `--force` 一并移出） |
 | `ibid col <create\|ls\|show\|add\|rm\|move\|sort\|merge\|delete>` | 管理面向单个交付物（PPT、论文、课题）的有序文献集合 |
-| `ibid export [collection] [--format ...] [--style ...] [--keep-order]` | 导出参考文献列表（`md`/`text`/`html`/`rtf`）、PPT 页脚短引文（`brief`）、`bibtex`、`csl-json` 或 `dossier` 速查表 |
-| `ibid find <title...> [--author ...] [--rows ...]` | 通过 OpenAlex 按标题检索候选文献（只给候选，不直接入库） |
+| `ibid export [collection] [--format ...] [--style ...] [--keep-order] [--omit pmid,pmcid]` | 导出参考文献列表（`md`/`text`/`html`/`rtf`）、PPT 页脚短引文（`brief`）、`bibtex`、`csl-json` 或 `dossier` 速查表 |
+| `ibid find <title...> [--author ...] [--rows ...]` | 通过 OpenAlex 按标题检索候选 DOI / PMID（只给候选，不直接入库） |
 | `ibid verify <file.bib \| file.md \| file.docx>` | 交叉核验文稿或 `.bib` 中的引用真实性、字段完整性与引用编号顺序 |
 | `ibid init` / `ibid where` | 在当前目录初始化项目级 `.ibid/` 库 / 查看当前生效的库路径与命中规则 |
 

@@ -342,3 +342,36 @@ export const fetchCsl = Effect.fn("fetchCsl")(function*(ref: Ref) {
     }
   } satisfies Fetched
 })
+
+/** PubMed's article-identifier search covers records outside PMC as well. */
+export const pubmedIdForDoi = Effect.fn("pubmedIdForDoi")(function*(doi: string) {
+  const url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+  const client = (yield* HttpClient.HttpClient).pipe(
+    HttpClient.mapRequest(HttpClientRequest.setHeader("User-Agent", USER_AGENT)),
+    HttpClient.filterStatusOk
+  )
+  // Explicit PubMed batches run serially; space searches below NCBI's unauthenticated 3/s limit.
+  yield* Effect.sleep("350 millis")
+  const body = yield* client.get(url, { urlParams: {
+    db: "pubmed", retmode: "json", retmax: "2", term: `"${doi}"[aid]`, tool: "ibid"
+  } }).pipe(
+    Effect.flatMap((r) => r.text),
+    Effect.timeout(`${TIMEOUT_SECONDS} seconds`),
+    Effect.mapError((e) => {
+      const { message, status } = httpFailure(e)
+      return status === 429
+        ? new UpstreamRateLimitError({ url, message: `PubMed search rate limited: ${message}` })
+        : new UpstreamError({ url, message: `PubMed search failed: ${message}` })
+    })
+  )
+  const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Struct({
+    esearchresult: Schema.Struct({ count: Schema.String, idlist: Schema.Array(Schema.String) })
+  })))(body).pipe(Effect.mapError(() => new UpstreamError({ url, message: "PubMed search returned an invalid response" })))
+  const { count, idlist } = result.esearchresult
+  if (count === "0" && idlist.length === 0) return yield* new IdentifierNotFoundError({ id: `doi:${doi}`, message: `doi:${doi}: not found in PubMed` })
+  if (!/^\d+$/.test(count) || Number(count) < 1 || idlist.some((id) => !/^\d+$/.test(id))) {
+    return yield* new UpstreamError({ url, message: "PubMed search returned invalid identifiers or count" })
+  }
+  if (count !== "1" || idlist.length !== 1) return yield* new UpstreamError({ url, message: `doi:${doi}: ambiguous PubMed search (${count} results); choose an explicit PMID` })
+  return idlist[0]!
+})

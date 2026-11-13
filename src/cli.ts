@@ -2,6 +2,7 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Console, Effect, FileSystem, Layer, Option, Path } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
+import { basename } from "node:path"
 import { FetchHttpClient } from "effect/http"
 import { col } from "./col.ts"
 import { deleteItem } from "./collections.ts"
@@ -39,6 +40,7 @@ import {
   usage,
   withWarnings
 } from "./ui.ts"
+import { upgrade } from "./upgrade.ts"
 import { verifyFile } from "./verify.ts"
 
 const idArg = Argument.String("id").pipe(Argument.withDescription("doi:…, pmid:…, pmc:…, arxiv:…, 10.x DOI or https://doi.org/ URL"))
@@ -236,9 +238,24 @@ const verify = Command.make("verify", {
   if (bad > 0) return yield* failWith(`${bad} of ${findings.length} finding(s) not OK`, json)
 }))).pipe(Command.withDescription("Audit a .bib or Markdown file against the store and the registries (writes nothing)"))
 
+const upgradeCmd = Command.make("upgrade", {
+  version: Argument.String("version").pipe(Argument.withDescription("Release to install, e.g. 0.3.0 or v0.3.0; the latest when omitted"), Argument.optional),
+  force: Flag.Boolean("force").pipe(Flag.withDescription("Reinstall even when already at that version"), Flag.withDefault(false)),
+  json
+}, handle(Effect.fn(function*({ force, json, version }) {
+  // Run from source, the executable is the bun runtime itself, which must never be replaced.
+  if (/^(bun|node)(\.exe)?$/i.test(basename(process.execPath))) {
+    return yield* usage("upgrade replaces the compiled ibid binary; this is running from source (update the checkout instead)")
+  }
+  const wanted = Option.getOrUndefined(version)?.replace(/^v/, "")
+  if (wanted !== undefined && !/^\d+\.\d+\.\d+([-+][\w.]+)?$/.test(wanted)) return yield* usage(`not a release version: ${wanted}`)
+  const r = yield* upgrade({ version: wanted, force, exe: process.execPath })
+  yield* json ? printJson(r) : Console.log(r.action === "upgraded" ? `upgraded\t${r.from} -> ${r.to}\t${r.path}` : `up-to-date\t${r.to}\t${r.path}`)
+}))).pipe(Command.withDescription("Replace this ibid binary with the latest release, or the given one"))
+
 Command.make("ibid").pipe(
   Command.withDescription("Verified local reference manager"),
-  Command.withSubcommands([add, show, ls, override, rm, tag, untag, note, col, exportCmd, find, verify, init, where]),
+  Command.withSubcommands([add, show, ls, override, rm, tag, untag, note, col, exportCmd, find, verify, init, where, upgradeCmd]),
   Command.run({ version: VERSION }),
   Effect.provide(Layer.mergeAll(BunServices.layer, FetchHttpClient.layer)),
   BunRuntime.runMain

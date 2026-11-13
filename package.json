@@ -1,6 +1,6 @@
 {
   "name": "ibid-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Zero-hallucination local reference manager and citation verifier CLI for humans and AI Agents",
   "type": "module",
   "license": "MIT",

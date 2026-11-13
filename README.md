@@ -23,6 +23,9 @@ powershell -c "irm https://raw.githubusercontent.com/waylon256yhw/ibid/main/inst
 
 # 或通过 Bun / npm 全局安装
 bun add -g github:waylon256yhw/ibid
+
+# 已安装后原地更新到最新版（或指定版本：ibid upgrade 0.3.0）
+ibid upgrade
 ```
 
 安装内置的渐进式披露 Agent Skill，让 Coding Agent（Claude Code、Gemini CLI、Cursor 等）在任意论文、PPT 或笔记工作区自动调用 `ibid`：

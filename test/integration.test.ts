@@ -133,6 +133,6 @@ describe("skills/ibid progressive-disclosure skill & distribution", () => {
   test("bin/ibid launcher executes and reports the package version", () => {
     const proc = Bun.spawnSync([join(rootDir, "bin", "ibid"), "--version"], { cwd: rootDir })
     expect(proc.exitCode).toBe(0)
-    expect(proc.stdout.toString().trim()).toBe("ibid v0.2.0")
+    expect(proc.stdout.toString().trim()).toBe("ibid v0.3.0")
   })
 })

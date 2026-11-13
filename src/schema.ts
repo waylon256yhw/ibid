@@ -148,6 +148,11 @@ export class ItemReferencedError extends Schema.TaggedError<ItemReferencedError>
   message: Schema.String
 }) {}
 
+/** `upgrade` could not find, check or install a release binary. */
+export class UpgradeError extends Schema.TaggedError<UpgradeError>()("UpgradeError", {
+  message: Schema.String
+}) {}
+
 export type IbidError =
   | InvalidIdentifierError
   | IdentifierNotFoundError
@@ -157,3 +162,4 @@ export type IbidError =
   | StoreError
   | CollectionError
   | ItemReferencedError
+  | UpgradeError

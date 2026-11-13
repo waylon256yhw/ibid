@@ -21,6 +21,8 @@ If `ibid` is not installed on `PATH`, install it first with one command:
 curl -fsSL https://raw.githubusercontent.com/waylon256yhw/ibid/main/install.sh | bash
 ```
 
+To update an installed binary in place: `ibid upgrade` (latest) or `ibid upgrade <version>`; `--json` reports `action` `upgraded` or `up-to-date`.
+
 Store discovery order (`ibid where`):
 1. `$IBID_DIR` environment variable;
 2. Nearest ancestor `.ibid/` directory from `cwd` (`ibid init` creates `./.ibid/`);

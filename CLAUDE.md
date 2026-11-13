@@ -14,7 +14,7 @@
 ```text
 ibid/
 ├── src/
-│   ├── cli.ts              CLI 顶层入口与子命令装配（add, show, ls, override, rm, tag, untag, note, col, export, find, verify, init, where）
+│   ├── cli.ts              CLI 顶层入口与子命令装配（add, show, ls, override, rm, tag, untag, note, col, export, find, verify, init, where, upgrade）
 │   ├── col.ts              `ibid col` 子命令树（create, ls, show, add, rm, move, sort, merge, delete）
 │   ├── ui.ts               人类终端摘要/详情格式化、`--json` 错误契约包装（`handle`/`report`/`Reported`）、作者列表异常告警
 │   ├── schema.ts           Effect Schema 领域模型（Csl, RegistryItem, ManualItem, Overrides, Collection）与 Tagged Error 定义
@@ -28,6 +28,7 @@ ibid/
 │   ├── entries.ts          列表条目与引用上下文的共享提取；显式参考文献标题与无标题列表判定
 │   ├── numbering.ts        正文数字引用（`[1]`, `[3–5]`）与编号参考文献列表的交叉核查（缺项、未引、乱序、断号、重号、重复文献）
 │   ├── docx.ts             零外部依赖的 `.docx`（ZIP + WordprocessingML）文本提取器（段落、修订、域代码、DOI 超链接、自动编号、脚注/尾注）
+│   ├── upgrade.ts          `ibid upgrade` 自更新：经 `/releases/latest` 重定向取最新版本、SHASUMS256 校验、复用 docx.ts 的 `unzip` 解包、`--version` 冒烟检查后 rename 替换（Windows 先改名为 `.old`）
 │   └── text.d.ts           `.csl` 与 `.xml` 文本导入的 TypeScript 类型声明
 ├── bin/
 │   └── ibid                npm / Bun 全局安装的跨平台 CLI 启动器（优先调预编译二进制，回退至 bun src/cli.ts 或按需拉取）

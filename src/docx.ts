@@ -6,7 +6,7 @@ import { inflateRawSync } from "node:zlib"
  * The files of a ZIP archive by name, each decompressed on demand. Stored and deflated entries only,
  * and no ZIP64, which only archives over 4 GB or with 65,535 entries need.
  */
-const unzip = (bytes: Uint8Array) => {
+export const unzip = (bytes: Uint8Array) => {
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   // The end-of-central-directory record is the last 22 bytes plus a comment of at most 64 KB.
   let eocd = -1
@@ -17,7 +17,7 @@ const unzip = (bytes: Uint8Array) => {
     }
   }
   if (eocd < 0) throw new Error("not a ZIP archive")
-  const files = new Map<string, () => string>()
+  const files = new Map<string, () => Uint8Array>()
   let p = v.getUint32(eocd + 16, true)
   for (let n = v.getUint16(eocd + 10, true); n > 0; n--) {
     if (v.getUint32(p, true) !== 0x02014b50) throw new Error("damaged ZIP archive")
@@ -32,7 +32,7 @@ const unzip = (bytes: Uint8Array) => {
       const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true)
       const raw = bytes.subarray(start, start + size)
       if (method !== 0 && method !== 8) throw new Error(`${name} uses unsupported compression method ${method}`)
-      return new TextDecoder().decode(method === 8 ? inflateRawSync(raw) : raw)
+      return method === 8 ? new Uint8Array(inflateRawSync(raw)) : raw
     })
   }
   return files
@@ -255,7 +255,10 @@ export const docxText = (bytes: Uint8Array): string => {
   }
   try {
     const files = unzip(bytes)
-    const read = (name: string) => files.get(name)?.()
+    const read = (name: string) => {
+      const file = files.get(name)
+      return file && new TextDecoder().decode(file())
+    }
     const body = read("word/document.xml")
     if (body === undefined) throw new Error("no word/document.xml, so not a Word document")
     const rels = (part: string) => parseRels(read(`word/_rels/${part}.rels`) ?? "")
